@@ -45,8 +45,9 @@ class EchoReasoner:
             possibility.probability = round(1.0 / n, 4)
 
         missing_heavy = any(f.quality is EvidenceQuality.MISSING for f in dossier.missing)
-        confidence = 0.2 if missing_heavy or dossier.shape is None else 0.45
-        noul = confidence < 0.3 or dossier.shape is None
+        has_structure = dossier.shape is not None or dossier.fingerprint is not None
+        confidence = 0.2 if missing_heavy or not has_structure else 0.45
+        noul = confidence < 0.3 or not has_structure
 
         return Decision(
             incident_id=dossier.incident_id,

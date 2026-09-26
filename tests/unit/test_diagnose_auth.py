@@ -5,9 +5,9 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
-import fire.apps.incident_engine.app as app_module
 from fire.apps.incident_engine.app import app
 from fire.apps.incident_engine.wiring import build_container
+import fire.apps.incident_engine.app as app_module
 
 
 @pytest.fixture
@@ -21,7 +21,7 @@ def client(monkeypatch: pytest.MonkeyPatch):
 
 @pytest.mark.unit
 def test_diagnose_missing_token_401(client: TestClient) -> None:
-    response = client.post("/v0/diagnose", json={"system": "example"})
+    response = client.post("/v0/diagnose", json={"project_id": "example"})
     assert response.status_code == 401
 
 
@@ -29,7 +29,7 @@ def test_diagnose_missing_token_401(client: TestClient) -> None:
 def test_diagnose_bad_token_401(client: TestClient) -> None:
     response = client.post(
         "/v0/diagnose",
-        json={"system": "example"},
+        json={"project_id": "example"},
         headers={"X-FIRE-Token": "wrong"},
     )
     assert response.status_code == 401
@@ -42,7 +42,7 @@ def test_diagnose_unset_token_env_503(monkeypatch: pytest.MonkeyPatch) -> None:
     with TestClient(app) as test_client:
         response = test_client.post(
             "/v0/diagnose",
-            json={"system": "example"},
+            json={"project_id": "example"},
             headers={"X-FIRE-Token": "anything"},
         )
     app_module._container = None
@@ -54,11 +54,15 @@ def test_diagnose_ok_202(client: TestClient) -> None:
     response = client.post(
         "/v0/diagnose",
         json={
-            "system": "example",
-            "schema_hash": "abc",
+            "project_id": "example",
+            "service": "api",
+            "fingerprint": {"schema_hash": "abc"},
             "process_hops": [{"service": "api", "operation": "POST /x"}],
         },
         headers={"X-FIRE-Token": "test-fire-token"},
     )
     assert response.status_code == 202
-    assert response.json()["status"] == "accepted"
+    body = response.json()
+    assert body["status"] == "accepted"
+    assert body["project_id"] == "example"
+    assert body["service"] == "api"

@@ -8,7 +8,10 @@ from pydantic import BaseModel, Field
 
 
 class Incident(BaseModel):
+    """Multi-project incident identity — no payload fields."""
+
     id: str
-    system: str
+    project_id: str
+    service: str | None = None
     summary: str | None = None
     started_at: datetime = Field(default_factory=lambda: datetime.now(UTC))

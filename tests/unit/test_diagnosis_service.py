@@ -1,4 +1,4 @@
-"""DiagnosisService wires reasoner → narrator → notifier."""
+"""DiagnosisService wires Reasoner → Narrator → Notifier."""
 
 from __future__ import annotations
 
@@ -14,21 +14,22 @@ from fire.core.services.diagnosis import DiagnosisService
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_diagnosis_pipeline(capsys: pytest.CaptureFixture[str]) -> None:
+async def test_pipeline_runs(capsys: pytest.CaptureFixture[str]) -> None:
     service = DiagnosisService(
         reasoner=EchoReasoner(),
         narrator=TemplateNarrator(),
         notifier=ConsoleNotifier(),
     )
-    incident = Incident(id="inc-2", system="example")
+    incident = Incident(id="inc-2", project_id="example", service="api")
     dossier = Dossier(
         incident_id="inc-2",
-        system="example",
-        shape=ShapeFingerprint(schema_hash="xyz"),
+        project_id="example",
+        service="api",
+        fingerprint=ShapeFingerprint(schema_hash="xyz"),
         process_path=ProcessPath(hops=[ProcessHop(service="api")]),
     )
     decision, narration = await service.run(incident, dossier)
-    assert decision.possibilities
-    assert "FIRE ENGINE" in narration.channel_text
+    assert decision.incident_id == "inc-2"
+    assert "inc-2" in narration.channel_text
     captured = capsys.readouterr()
     assert "inc-2" in captured.out

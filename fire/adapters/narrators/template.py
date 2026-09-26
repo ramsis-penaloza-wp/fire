@@ -9,8 +9,9 @@ from fire.core.domain.narration import Narration
 
 class TemplateNarrator:
     async def narrate(self, dossier: Dossier, decision: Decision) -> Narration:
+        scope = dossier.project_id + (f"/{dossier.service}" if dossier.service else "")
         lines = [
-            f"*FIRE ENGINE* incident `{decision.incident_id}` (`{dossier.system}`)",
+            f"*FIRE ENGINE* incident `{decision.incident_id}` (`{scope}`)",
             f"Confidence: {decision.confidence:.0%}"
             + (" — `noul` (do not treat as settled cause)" if decision.noul else ""),
             "Possibilities:",
@@ -26,8 +27,11 @@ class TemplateNarrator:
         )
         if path:
             lines.append(f"Process path: `{path}`")
-        if dossier.shape is not None:
-            lines.append(f"Shape hash: `{dossier.shape.schema_hash}`")
+        if dossier.fingerprint is not None:
+            lines.append(f"Shape hash: `{dossier.fingerprint.schema_hash}`")
+        elif dossier.shape is not None:
+            paths = ", ".join(f.path for f in dossier.shape.fields) or "—"
+            lines.append(f"Shape fields: `{paths}` (no fingerprint yet)")
         lines.append("_Narrator: template stub (swap OpenAI-compat via FIRE_NARRATOR_*)._")
         return Narration(
             incident_id=decision.incident_id,

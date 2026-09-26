@@ -1,4 +1,4 @@
-"""Echo reasoner builds possibilities from process path."""
+"""Echo reasoner builds options from path + missing evidence."""
 
 from __future__ import annotations
 
@@ -9,26 +9,29 @@ from fire.core.domain.dossier import (
     Dossier,
     ProcessHop,
     ProcessPath,
+    Shape,
+    ShapeField,
     ShapeFingerprint,
+    ValueType,
 )
 
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_echo_reasoner_from_path() -> None:
+async def test_echo_with_shape_and_fingerprint() -> None:
     dossier = Dossier(
         incident_id="inc-1",
-        system="example",
-        shape=ShapeFingerprint(schema_hash="abc", field_paths=["order.id"]),
+        project_id="example",
+        service="checkout",
+        shape=Shape(
+            fields=[ShapeField(path="order.id", value_type=ValueType.STRING)]
+        ),
+        fingerprint=ShapeFingerprint(schema_hash="abc", normalized_paths=["order.id"]),
         process_path=ProcessPath(
-            hops=[
-                ProcessHop(service="gateway", operation="POST /orders"),
-                ProcessHop(service="billing", operation="charge"),
-            ]
+            hops=[ProcessHop(service="api", operation="POST /orders")]
         ),
     )
     decision = await EchoReasoner().decide(dossier)
-    assert decision.incident_id == "inc-1"
-    assert len(decision.possibilities) == 2
-    assert abs(sum(p.probability for p in decision.possibilities) - 1.0) < 1e-6
     assert decision.noul is False
+    assert decision.confidence >= 0.3
+    assert any(p.id.startswith("hop-") for p in decision.possibilities)

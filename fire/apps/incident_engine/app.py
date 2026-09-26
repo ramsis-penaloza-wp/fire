@@ -18,6 +18,7 @@ from fire.core.domain.dossier import (
     EvidenceQuality,
     ProcessHop,
     ProcessPath,
+    Shape,
     ShapeFingerprint,
 )
 from fire.core.domain.incident import Incident
@@ -46,12 +47,13 @@ app = FastAPI(title="FIRE ENGINE", version="0.1.0", lifespan=lifespan)
 
 
 class DiagnoseRequest(BaseModel):
-    system: str
+    """Edge ingest — project-scoped; shape nested; no hard-coded system names."""
+
+    project_id: str
+    service: str | None = None
     summary: str | None = None
-    schema_hash: str | None = Field(
-        default=None, description="Shape fingerprint hash — not raw payload."
-    )
-    field_paths: list[str] = Field(default_factory=list)
+    shape: Shape | None = None
+    fingerprint: ShapeFingerprint | None = None
     process_hops: list[ProcessHop] = Field(default_factory=list)
 
 
@@ -85,28 +87,44 @@ async def diagnose(
     _require_token(x_fire_token, container.config.api.token_env)
 
     incident_id = str(uuid.uuid4())
-    incident = Incident(id=incident_id, system=body.system, summary=body.summary)
-    shape = None
-    if body.schema_hash:
-        shape = ShapeFingerprint(
-            schema_hash=body.schema_hash,
-            field_paths=list(body.field_paths),
-        )
+    incident = Incident(
+        id=incident_id,
+        project_id=body.project_id,
+        service=body.service,
+        summary=body.summary,
+    )
+    shape = body.shape
+    fingerprint = body.fingerprint
     missing: list[EvidenceFragment] = []
-    if shape is None:
+    if shape is None and fingerprint is None:
         missing.append(
             EvidenceFragment(
                 collector="shape",
                 quality=EvidenceQuality.MISSING,
-                summary="No shape fingerprint provided",
+                summary="No shape or fingerprint provided",
+            )
+        )
+    elif fingerprint is None:
+        missing.append(
+            EvidenceFragment(
+                collector="fingerprint",
+                quality=EvidenceQuality.MISSING,
+                summary="Shape present without stable fingerprint (generalizer is a future port)",
             )
         )
     dossier = Dossier(
         incident_id=incident_id,
-        system=body.system,
+        project_id=body.project_id,
+        service=body.service,
         shape=shape,
+        fingerprint=fingerprint,
         process_path=ProcessPath(hops=list(body.process_hops)),
         missing=missing,
     )
     background_tasks.add_task(_run_pipeline, incident, dossier)
-    return {"status": "accepted", "incident_id": incident_id, "system": body.system}
+    return {
+        "status": "accepted",
+        "incident_id": incident_id,
+        "project_id": body.project_id,
+        "service": body.service,
+    }
