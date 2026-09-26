@@ -14,7 +14,8 @@ values) and the **process path** a request walked — which services, spans, and
 changes it hit — then ranks **why it may have failed**.
 
 Ingest → correlate → assemble a dossier (shape + path + context) → System One
-reasoner → notifier. Target: calibrated possibility sets in under 30 seconds.
+reasoner → **Narrator** (LLM prose) → notifier. Target: calibrated possibilities
+in under 30 seconds, then a readable Slack message.
 
 Panoptes stays untouched; this repo is the clean slate for that thesis.
 
@@ -29,9 +30,10 @@ Existing IR tools are weak at connecting “what the payload *looked like*” wi
    chain), change timeline, dependency health, visibility gaps, runbooks.
 3. **Reason** with a **System One** model (default **Laya**, Jev-compatible) over
    that dossier only — shape + path → **dynamic calibrated possibilities**, never
-   raw PII/payload bodies and never a free-form LLM essay as the happy path.
-4. **Explain** the ranked possibilities (and optional remediation hints) to the
-   on-call channel.
+   raw PII/payload bodies and never a free-form LLM essay as the decision path.
+4. **Narrate** — an LLM **Narrator** turns the decision + shape/path fragments into
+   a coherent Slack message (prose only; cannot invent cause or see raw values).
+5. **Notify** the on-call channel with that message.
 
 ## Architecture
 
@@ -41,7 +43,7 @@ added):
 - `fire/core/` — domain, ports, and services. **Zero knowledge of concrete
   watched systems and zero infra deps** (only `pydantic` / hashing).
 - `fire/adapters/` — concrete port implementations (ingest, collectors, stores,
-  reasoners, notifiers). Imports `core`.
+  reasoners, narrators, notifiers). Imports `core`.
 - `fire/apps/` — runnable apps (incident engine). Imports both.
 - `config/systems/` — one YAML per watched system; all per-system variability
   lives here, never in core.
@@ -61,7 +63,8 @@ Alert / ingest returns **202 at T=0**; diagnosis runs in background:
    missing evidence is declared `MISSING`, never invented.
 3. **Reason** — System One (`choice` / `score` / `noul`) over shape + process
    path (+ changes, deps, runbooks) → calibrated possibility distribution.
-4. **Notify** — console locally; Slack (or equivalent) when wired.
+4. **Narrate** — LLM Narrator formats decision + safe fragments → Slack prose.
+5. **Notify** — console locally; Slack (or equivalent) when wired.
 
 | Tier | Meaning | Default budget |
 |------|---------|----------------|
@@ -85,11 +88,28 @@ Alert / ingest returns **202 at T=0**; diagnosis runs in background:
   escalation. Generative LLM is **not** the default reasoner.
 - Local echo/heuristic stubs may stand in for demos behind the same port.
 
+### Narrator contract (non-negotiable)
+
+Jev/Laya **decides**; the **Narrator** only writes readable prose for Slack.
+
+- Input: System One decision (possibilities + confidence) + shape/path fragments
+  already in the dossier. **No raw payload values.**
+- Output: coherent channel message. Must **not** invent a root cause, raise
+  confidence, or introduce facts absent from the decision/dossier.
+- Default adapter: **OpenAI-compatible** chat Completions via env
+  (`FIRE_NARRATOR_BASE_URL`, `FIRE_NARRATOR_API_KEY`, `FIRE_NARRATOR_MODEL`).
+  Keys never live in the repo.
+- **Cursor API** (`api.cursor.com` Cloud Agents) is **not** the happy path for
+  narration (wrong product surface). A Cursor-keyed proxy remains a documented
+  non-prod spike only if explicitly requested.
+- Local template/echo narrator may stand in for demos behind the same port.
+
 ## Current state
 
 Greenfield repo: private GitHub + this README. Next: minimal scaffold
-(`pyproject`, package `fire`, empty ports for shape/path → System One reasoner),
-then ingest + dossier + Laya/Jev adapter, then notifier (+ optional LLM escalate).
+(`pyproject`, package `fire`, empty ports for shape/path → System One reasoner
++ Narrator), then ingest + dossier + Laya/Jev adapter, then OpenAI-compat
+Narrator + Slack notifier.
 
 No copy of Panoptes source into this tree — ideas and layering only.
 No published accuracy claims; no “FIRE benchmark” numbers in docs until measured.
