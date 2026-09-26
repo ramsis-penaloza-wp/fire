@@ -12,7 +12,7 @@ import fire.apps.incident_engine.app as app_module
 
 @pytest.fixture
 def client(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setenv("FIRE_API_TOKEN", "secret-token")
+    monkeypatch.setenv("FIRE_API_TOKEN", "test-fire-token")
     app_module._container = build_container()
     with TestClient(app) as test_client:
         yield test_client
@@ -58,7 +58,7 @@ def test_diagnose_ok_202(client: TestClient) -> None:
             "schema_hash": "abc",
             "process_hops": [{"service": "api", "operation": "POST /x"}],
         },
-        headers={"X-FIRE-Token": "secret-token"},
+        headers={"X-FIRE-Token": "test-fire-token"},
     )
     assert response.status_code == 202
     assert response.json()["status"] == "accepted"
