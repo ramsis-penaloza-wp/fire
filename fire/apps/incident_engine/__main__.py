@@ -5,11 +5,12 @@ from __future__ import annotations
 import os
 
 import uvicorn
-from dotenv import load_dotenv
+
+from fire.apps.env import load_fire_env
 
 
 def main() -> None:
-    load_dotenv()
+    load_fire_env()
     uvicorn.run(
         "fire.apps.incident_engine.app:app",
         host=os.environ.get("FIRE_HOST", "127.0.0.1"),

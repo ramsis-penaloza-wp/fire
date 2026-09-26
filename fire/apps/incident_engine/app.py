@@ -10,6 +10,7 @@ from typing import Any
 from fastapi import BackgroundTasks, FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field
 
+from fire.apps.env import load_fire_env
 from fire.apps.incident_engine.wiring import Container, build_container
 from fire.core.domain.dossier import (
     Dossier,
@@ -33,6 +34,9 @@ def get_container() -> Container:
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     global _container
+    # Process env wins over .env (override=False). Must run before auth/wiring
+    # read os.environ.
+    load_fire_env()
     _container = build_container()
     yield
     _container = None
