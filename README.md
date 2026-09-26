@@ -1,35 +1,37 @@
 ```
-  ███████╗██╗██████╗ ███████╗
-  ██╔════╝██║██╔══██╗██╔════╝
-  █████╗  ██║██████╔╝█████╗
-  ██╔══╝  ██║██╔══██╗██╔══╝
-  ██║     ██║██║  ██║███████╗
-  ╚═╝     ╚═╝╚═╝  ╚═╝╚══════╝
+  ███████╗██╗██████╗ ███████╗     ███████╗███╗   ██╗ ██████╗ ██╗███╗   ██╗███████╗
+  ██╔════╝██║██╔══██╗██╔════╝     ██╔════╝████╗  ██║██╔════╝ ██║████╗  ██║██╔════╝
+  █████╗  ██║██████╔╝█████╗       █████╗  ██╔██╗ ██║██║  ███╗██║██╔██╗ ██║█████╗
+  ██╔══╝  ██║██╔══██╗██╔══╝       ██╔══╝  ██║╚██╗██║██║   ██║██║██║╚██╗██║██╔══╝
+  ██║     ██║██║  ██║███████╗     ███████╗██║ ╚████║╚██████╔╝██║██║ ╚████║███████╗
+  ╚═╝     ╚═╝╚═╝  ╚═╝╚══════╝     ╚══════╝╚═╝  ╚═══╝ ╚═════╝ ╚═╝╚═╝  ╚═══╝╚══════╝
 ```
 
-**FIRE — Failure Investigation & Root Explanation**
+**FIRE ENGINE — Failure Investigation & Root Explanation**
 
 AI-assisted incident response that reasons over **payload shape** (never raw field
 values) and the **process path** a request walked — which services, spans, and
-changes it hit — then proposes why it failed.
+changes it hit — then ranks **why it may have failed**.
 
-Ingest → correlate → assemble a dossier (shape + path + context) → reasoner →
-notifier. Target: useful root-cause hypotheses in under 30 seconds.
+Ingest → correlate → assemble a dossier (shape + path + context) → System One
+reasoner → notifier. Target: calibrated possibility sets in under 30 seconds.
 
 Panoptes stays untouched; this repo is the clean slate for that thesis.
 
 ## Purpose
 
 Existing IR tools are weak at connecting “what the payload *looked like*” with
-“which path through the system it took.” FIRE is built for that gap:
+“which path through the system it took.” FIRE ENGINE is built for that gap:
 
 1. **Ingest** structured trace/object streams from watched transaction systems,
    storing **fingerprints / shapes**, not secret values.
 2. **Assemble** an incident dossier: shape drift, process path (span/service
    chain), change timeline, dependency health, visibility gaps, runbooks.
-3. **Reason** with an LLM (or a local echo stub) over that dossier only —
-   shape + path + hypotheses, never raw PII/payload bodies.
-4. **Explain** root cause and remediation to the on-call channel.
+3. **Reason** with a **System One** model (default **Laya**, Jev-compatible) over
+   that dossier only — shape + path → **dynamic calibrated possibilities**, never
+   raw PII/payload bodies and never a free-form LLM essay as the happy path.
+4. **Explain** the ranked possibilities (and optional remediation hints) to the
+   on-call channel.
 
 ## Architecture
 
@@ -57,8 +59,8 @@ Alert / ingest returns **202 at T=0**; diagnosis runs in background:
 1. **Correlate** — collapse storm alerts into one incident window.
 2. **Assemble dossier** — collectors fan out concurrently with per-tier budgets;
    missing evidence is declared `MISSING`, never invented.
-3. **Reason** — stream diagnosis chunks from shape + process path (+ changes,
-   deps, runbooks).
+3. **Reason** — System One (`choice` / `score` / `noul`) over shape + process
+   path (+ changes, deps, runbooks) → calibrated possibility distribution.
 4. **Notify** — console locally; Slack (or equivalent) when wired.
 
 | Tier | Meaning | Default budget |
@@ -69,18 +71,28 @@ Alert / ingest returns **202 at T=0**; diagnosis runs in background:
 
 ### Reasoner contract (non-negotiable)
 
-The reasoner receives **shape-only** payload evidence and a **process path**
-(services/spans/changes). It must not be given raw field values. Echo/heuristic
-stubs are for local demos; production path is a real LLM adapter behind the same
-port.
+- Input: **shape-only** payload evidence + **process path** (services/spans/changes).
+  No raw field values.
+- Engine: **System One**, not a full generative LLM on the happy path.
+  - Default: **Laya** (open-weight, local; Jev-compatible wire `/v1/systemone`).
+  - Alt: **Jev** hosted.
+  - Primitives: `choice` / `score` / `noul` over the dossier.
+  - Output: **dynamic calibrated possibilities** (distribution + confidence), not
+    prose root-cause. Option sets for `choice` can be built per incident from the
+    path/hypotheses.
+  - `noul` is the privacy gate when evidence is insufficient or unsafe to score.
+- Cascade: Laya first → low confidence → human and/or optional generative LLM
+  escalation. Generative LLM is **not** the default reasoner.
+- Local echo/heuristic stubs may stand in for demos behind the same port.
 
 ## Current state
 
 Greenfield repo: private GitHub + this README. Next: minimal scaffold
-(`pyproject`, package `fire`, empty ports for shape/path → reasoner), then
-ingest + dossier + echo reasoner, then LLM/notifier adapters.
+(`pyproject`, package `fire`, empty ports for shape/path → System One reasoner),
+then ingest + dossier + Laya/Jev adapter, then notifier (+ optional LLM escalate).
 
 No copy of Panoptes source into this tree — ideas and layering only.
+No published accuracy claims; no “FIRE benchmark” numbers in docs until measured.
 
 ## Development (planned)
 
