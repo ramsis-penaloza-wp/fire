@@ -1,0 +1,13 @@
+# Copy to config/systems/<system>.yml — per-system variability lives here, not in core.
+system: example
+display_name: Example System
+team_channel: "#example-incidents"
+
+# Shape fingerprint sources (no raw values stored).
+fingerprinting:
+  sample_rate: 0.02
+  sources: []
+
+# Process-path hints for collectors (wired in later milestones).
+process_path:
+  services: []

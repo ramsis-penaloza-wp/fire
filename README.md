@@ -106,10 +106,12 @@ Jev/Laya **decides**; the **Narrator** only writes readable prose for Slack.
 
 ## Current state
 
-Greenfield repo: private GitHub + this README. Next: minimal scaffold
-(`pyproject`, package `fire`, empty ports for shape/path → System One reasoner
-+ Narrator), then ingest + dossier + Laya/Jev adapter, then OpenAI-compat
-Narrator + Slack notifier.
+Scaffold **v0** is in tree: hexagonal `fire/{core,adapters,apps}`, ports
+Reasoner ≠ Narrator ≠ Notifier, Echo/Template/Console stubs, FastAPI
+`POST /v0/diagnose` (auth fail-closed), config templates, unit tests.
+
+Next: Laya/Jev System One adapter, OpenAI-compat Narrator, Slack notifier,
+real collectors — still no Panoptes copy / no `omg.yml`.
 
 No copy of Panoptes source into this tree — ideas and layering only.
 No published accuracy claims; no “FIRE benchmark” numbers in docs until measured.
