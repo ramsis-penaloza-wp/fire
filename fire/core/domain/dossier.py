@@ -44,7 +44,7 @@ class ShapeField(BaseModel):
 class Shape(BaseModel):
     """Reusable structure description — keys/types/cardinality only.
 
-    Not a generalizer: assembling Shape from raw payloads is a future port.
+    Produced by ShapeGeneralizer (flat paths with [*] / #variant). Not a fingerprint.
     """
 
     fields: list[ShapeField] = Field(default_factory=list)

@@ -1,1 +1,1 @@
-"""Ports: Reasoner, Narrator, Notifier, OriginRegistry, ShapeCatalog."""
+"""Ports: Reasoner, Narrator, Notifier, OriginRegistry, ShapeCatalog, ShapeGeneralizer."""
