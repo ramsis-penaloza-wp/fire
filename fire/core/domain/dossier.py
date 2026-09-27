@@ -16,14 +16,25 @@ class EvidenceQuality(StrEnum):
 
 
 class ValueType(StrEnum):
-    """JSON-ish type labels for shape fields — not runtime values."""
+    """Formal leaf/structure types for ShapeField — never runtime values.
 
-    STRING = "string"
-    NUMBER = "number"
-    BOOLEAN = "boolean"
+    v0 set (Project Ops): structure + integer/number split + string refinements
+    inferred by form only. Media MIME (image/audio/video) is P1 — not here.
+    """
+
     OBJECT = "object"
     ARRAY = "array"
     NULL = "null"
+    BOOLEAN = "boolean"
+    INTEGER = "integer"
+    NUMBER = "number"  # float / non-int numeric
+    STRING = "string"
+    DATETIME = "datetime"
+    DATE = "date"
+    UUID = "uuid"
+    URI = "uri"
+    EMAIL = "email"
+    BINARY = "binary"  # base64-ish form; not MIME media
     UNKNOWN = "unknown"
 
 

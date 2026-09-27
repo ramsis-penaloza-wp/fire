@@ -3,6 +3,8 @@
 Locked model (Project Ops 2026-09-27): homogeneous arrays share one template under
 `path[*].…`; mixed arrays use `path[*]#k.…`. Never emit `path[0]`…`path[N]`,
 element counts, values, or fingerprints.
+
+ValueType is a single domain StrEnum; leaves are inferred by form only.
 """
 
 from __future__ import annotations
@@ -17,21 +19,65 @@ from fire.core.domain.dossier import (
     ValueType,
 )
 
+_UUID_RE = re.compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_DATETIME_RE = re.compile(
+    r"^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:?\d{2})?$"
+)
+_URI_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.-]*://\S+$")
+_BASE64_RE = re.compile(r"^[A-Za-z0-9+/]+={0,2}$")
+
+
+def _classify_string(value: str) -> ValueType:
+    """Form-only string refinements; never store the value on Shape."""
+    if _UUID_RE.match(value):
+        return ValueType.UUID
+    if _EMAIL_RE.match(value):
+        return ValueType.EMAIL
+    if _URI_RE.match(value):
+        return ValueType.URI
+    if _DATETIME_RE.match(value):
+        return ValueType.DATETIME
+    if _DATE_RE.match(value):
+        return ValueType.DATE
+    # base64-ish: long enough, charset + optional padding — not MIME media
+    if len(value) >= 16 and len(value) % 4 == 0 and _BASE64_RE.match(value):
+        return ValueType.BINARY
+    return ValueType.STRING
+
+
+def _classify_leaf(value: Any) -> ValueType:
+    if value is None:
+        return ValueType.NULL
+    if isinstance(value, bool):
+        return ValueType.BOOLEAN
+    if isinstance(value, int):
+        return ValueType.INTEGER
+    if isinstance(value, float):
+        return ValueType.NUMBER
+    if isinstance(value, str):
+        return _classify_string(value)
+    return ValueType.UNKNOWN
+
 
 def _structural_signature(value: Any) -> tuple[Any, ...]:
     """Canonical structural id for equality (keys sorted; no values).
 
     Arrays are length-agnostic: homogeneous → ("array", element_sig);
     mixed → ("array", ("mixed", unique_element_sigs…)). Never encode length.
+    Leaf sig uses ValueType so integer ≠ number and uuid ≠ string.
     """
-    if value is None:
-        return ("null",)
-    if isinstance(value, bool):
-        return ("boolean",)
-    if isinstance(value, (int, float)):
-        return ("number",)
-    if isinstance(value, str):
-        return ("string",)
+    if isinstance(value, dict):
+        return (
+            "object",
+            tuple(
+                (key, _structural_signature(child))
+                for key, child in sorted(value.items(), key=lambda kv: kv[0])
+            ),
+        )
     if isinstance(value, list):
         if not value:
             return ("array", ("empty",))
@@ -45,15 +91,7 @@ def _structural_signature(value: Any) -> tuple[Any, ...]:
         if len(unique) == 1:
             return ("array", unique[0])
         return ("array", ("mixed", tuple(unique)))
-    if isinstance(value, dict):
-        return (
-            "object",
-            tuple(
-                (key, _structural_signature(child))
-                for key, child in sorted(value.items(), key=lambda kv: kv[0])
-            ),
-        )
-    return ("unknown",)
+    return (_classify_leaf(value).value,)
 
 
 def _child_path(prefix: str, key: str) -> str:
@@ -85,39 +123,8 @@ class FlatStarShapeGeneralizer:
         return Shape(fields=fields)
 
     def _walk(self, value: Any, path: str, fields: list[ShapeField]) -> None:
-        if value is None:
-            fields.append(
-                ShapeField(
-                    path=path,
-                    value_type=ValueType.NULL,
-                    cardinality=Cardinality.OPTIONAL,
-                )
-            )
-            return
-        if isinstance(value, bool):
-            fields.append(
-                ShapeField(
-                    path=path, value_type=ValueType.BOOLEAN, cardinality=Cardinality.ONE
-                )
-            )
-            return
-        if isinstance(value, (int, float)):
-            fields.append(
-                ShapeField(
-                    path=path, value_type=ValueType.NUMBER, cardinality=Cardinality.ONE
-                )
-            )
-            return
-        if isinstance(value, str):
-            fields.append(
-                ShapeField(
-                    path=path, value_type=ValueType.STRING, cardinality=Cardinality.ONE
-                )
-            )
-            return
         if isinstance(value, dict):
             if not value:
-                # Root {} → empty Shape. Nested / slot {} → object|one marker.
                 if path:
                     fields.append(
                         ShapeField(
@@ -127,8 +134,6 @@ class FlatStarShapeGeneralizer:
                         )
                     )
                 return
-            # Non-empty object under [*] / [*]#k: skip emitting the slot as object;
-            # only children (lines[*].sku). Named objects still get object|one.
             if path and not _is_array_element_slot(path):
                 fields.append(
                     ShapeField(
@@ -152,10 +157,13 @@ class FlatStarShapeGeneralizer:
                 return
             self._walk_array_elements(value, path, fields)
             return
+
+        leaf = _classify_leaf(value)
+        cardinality = (
+            Cardinality.OPTIONAL if leaf is ValueType.NULL else Cardinality.ONE
+        )
         fields.append(
-            ShapeField(
-                path=path, value_type=ValueType.UNKNOWN, cardinality=Cardinality.ONE
-            )
+            ShapeField(path=path, value_type=leaf, cardinality=cardinality)
         )
 
     def _walk_array_elements(
