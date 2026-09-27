@@ -5,12 +5,6 @@ from __future__ import annotations
 import pytest
 
 from fire.adapters.shapes.flat_star import FlatStarShapeGeneralizer
-from fire.core.domain.cardinality_resolver import (
-    LegacyCardinality,
-    format_count,
-    from_shape_cardinality,
-    to_shape_cardinality,
-)
 from fire.core.domain.dossier import ValueType
 from fire.core.ports.shape_generalizer import ShapeGeneralizer
 
@@ -169,16 +163,3 @@ def test_cardinality_null_void_digit_strings(engine: FlatStarShapeGeneralizer) -
     assert isinstance(dumped["fields"][0]["cardinality"], str)
 
 
-@pytest.mark.unit
-def test_cardinality_resolver_round_trip() -> None:
-    assert to_shape_cardinality(LegacyCardinality.OPTIONAL) == "0"
-    assert to_shape_cardinality(LegacyCardinality.ONE) == "1"
-    assert to_shape_cardinality(LegacyCardinality.MANY) == "n"
-    assert to_shape_cardinality(LegacyCardinality.VOID) == "void"
-    assert format_count(2) == "2"
-    assert from_shape_cardinality(None) is LegacyCardinality.OPTIONAL
-    assert from_shape_cardinality("0") is LegacyCardinality.OPTIONAL
-    assert from_shape_cardinality("1") is LegacyCardinality.ONE
-    assert from_shape_cardinality("n") is LegacyCardinality.MANY
-    assert from_shape_cardinality("void") is LegacyCardinality.VOID
-    assert from_shape_cardinality("5") is LegacyCardinality.MANY

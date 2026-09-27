@@ -19,7 +19,6 @@ from uuid import UUID
 
 from pydantic import AnyUrl, EmailStr, StrictInt, TypeAdapter, ValidationError
 
-from fire.core.domain.cardinality_resolver import format_count
 from fire.core.domain.dossier import (
     Shape,
     ShapeField,
@@ -179,7 +178,7 @@ class FlatStarShapeGeneralizer:
                 ShapeField(
                     path=path,
                     value_type=ValueType.ARRAY,
-                    cardinality=format_count(len(value)),
+                    cardinality=str(len(value)),
                 )
             )
             if not value:

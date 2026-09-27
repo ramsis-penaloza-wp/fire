@@ -39,7 +39,7 @@ class ValueType(StrEnum):
 
 
 # Shape cardinality: null | "void" | digit string "0"…"N" | "n" (unbounded).
-# Never a JSON int. Legacy one/many/optional live only in cardinality_resolver.
+# Never a JSON int. No legacy one/many/optional labels.
 CardinalityValue = str | None  # null | "void" | "0"…"N" | "n"
 
 
