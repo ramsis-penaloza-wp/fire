@@ -34,7 +34,7 @@ class ValueType(StrEnum):
     UUID = "uuid"
     URI = "uri"
     EMAIL = "email"
-    BINARY = "binary"  # base64-ish form; not MIME media
+    BINARY = "binary"  # stdlib base64 decode (validate=True); not MIME media
     UNKNOWN = "unknown"
 
 

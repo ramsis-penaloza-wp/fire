@@ -146,11 +146,11 @@ def test_refined_string_types(engine: FlatStarShapeGeneralizer) -> None:
         engine.generalize(
             {
                 "id": "550e8400-e29b-41d4-a716-446655440000",
-                "mail": "a@b.co",
+                "mail": "user@example.com",
                 "link": "https://example.com/x",
                 "when": "2024-01-15T12:00:00Z",
                 "day": "2024-01-15",
-                "blob": "SGVsbG8gV29ybGQhISE=",  # 20 chars, base64
+                "blob": "SGVsbG8gV29ybGQhISE=",  # valid base64 (b64decode validate=True)
                 "plain": "hello",
             }
         )
@@ -169,3 +169,9 @@ def test_value_type_is_formal_enum() -> None:
     assert ValueType.INTEGER.value == "integer"
     assert ValueType.DATETIME.value == "datetime"
     assert "image" not in {m.value for m in ValueType}  # media MIME = P1
+
+
+@pytest.mark.unit
+def test_binary_rejects_invalid_base64(engine: FlatStarShapeGeneralizer) -> None:
+    paths = _paths(engine.generalize({"x": "not!!valid!!base64!!"}))
+    assert paths["x"] == ("string", "one")

@@ -4,13 +4,20 @@ Locked model (Project Ops 2026-09-27): homogeneous arrays share one template und
 `path[*].…`; mixed arrays use `path[*]#k.…`. Never emit `path[0]`…`path[N]`,
 element counts, values, or fingerprints.
 
-ValueType is a single domain StrEnum; leaves are inferred by form only.
+Leaf inference uses Pydantic TypeAdapter (UUID, EmailStr, AnyUrl, date, datetime,
+StrictInt) plus stdlib base64.b64decode(validate=True) for binary — no homemade
+regex classifiers.
 """
 
 from __future__ import annotations
 
+import base64
 import re
+from datetime import date, datetime
 from typing import Any
+from uuid import UUID
+
+from pydantic import AnyUrl, EmailStr, StrictInt, TypeAdapter, ValidationError
 
 from fire.core.domain.dossier import (
     Cardinality,
@@ -19,32 +26,49 @@ from fire.core.domain.dossier import (
     ValueType,
 )
 
-_UUID_RE = re.compile(
-    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
-)
-_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
-_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
-_DATETIME_RE = re.compile(
-    r"^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:?\d{2})?$"
-)
-_URI_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.-]*://\S+$")
-_BASE64_RE = re.compile(r"^[A-Za-z0-9+/]+={0,2}$")
+_UUID = TypeAdapter(UUID)
+_EMAIL = TypeAdapter(EmailStr)
+_URL = TypeAdapter(AnyUrl)
+_DATE = TypeAdapter(date)
+_DATETIME = TypeAdapter(datetime)
+_STRICT_INT = TypeAdapter(StrictInt)
+
+_MIN_BINARY_LEN = 16
+
+
+def _try_adapter(adapter: TypeAdapter[Any], value: str) -> bool:
+    try:
+        adapter.validate_python(value)
+        return True
+    except ValidationError:
+        return False
+
+
+def _is_binary(value: str) -> bool:
+    """Slim standard check: stdlib base64 decode with validate=True."""
+    if len(value) < _MIN_BINARY_LEN or len(value) % 4 != 0:
+        return False
+    try:
+        base64.b64decode(value, validate=True)
+        return True
+    except (ValueError, TypeError):
+        return False
 
 
 def _classify_string(value: str) -> ValueType:
-    """Form-only string refinements; never store the value on Shape."""
-    if _UUID_RE.match(value):
+    """Form-only string refinements via Pydantic / stdlib; never store the value."""
+    if _try_adapter(_UUID, value):
         return ValueType.UUID
-    if _EMAIL_RE.match(value):
+    if _try_adapter(_EMAIL, value):
         return ValueType.EMAIL
-    if _URI_RE.match(value):
+    if _try_adapter(_URL, value):
         return ValueType.URI
-    if _DATETIME_RE.match(value):
-        return ValueType.DATETIME
-    if _DATE_RE.match(value):
+    # date before datetime: Pydantic accepts YYYY-MM-DD as datetime midnight
+    if _try_adapter(_DATE, value):
         return ValueType.DATE
-    # base64-ish: long enough, charset + optional padding — not MIME media
-    if len(value) >= 16 and len(value) % 4 == 0 and _BASE64_RE.match(value):
+    if _try_adapter(_DATETIME, value):
+        return ValueType.DATETIME
+    if _is_binary(value):
         return ValueType.BINARY
     return ValueType.STRING
 
@@ -54,8 +78,13 @@ def _classify_leaf(value: Any) -> ValueType:
         return ValueType.NULL
     if isinstance(value, bool):
         return ValueType.BOOLEAN
-    if isinstance(value, int):
-        return ValueType.INTEGER
+    if isinstance(value, int) and not isinstance(value, bool):
+        # Prefer StrictInt semantics (bool already excluded).
+        try:
+            _STRICT_INT.validate_python(value)
+            return ValueType.INTEGER
+        except ValidationError:
+            return ValueType.NUMBER
     if isinstance(value, float):
         return ValueType.NUMBER
     if isinstance(value, str):
