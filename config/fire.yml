@@ -1,0 +1,22 @@
+# Global FIRE ENGINE config. Secrets via env refs, never inline.
+api:
+  token_env: FIRE_API_TOKEN
+
+reasoner:
+  provider: echo  # echo | laya | jev
+  # base_url_env: FIRE_SYSTEMONE_BASE_URL
+  # api_key_env: FIRE_SYSTEMONE_API_KEY
+
+narrator:
+  provider: template  # template | openai_compat
+  base_url_env: FIRE_NARRATOR_BASE_URL
+  api_key_env: FIRE_NARRATOR_API_KEY
+  model_env: FIRE_NARRATOR_MODEL
+
+notifier:
+  provider: console  # console | slack (later)
+
+budgets:
+  tier0_ms: 300
+  tier1_ms: 3000
+  tier2_ms: 1500
