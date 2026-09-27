@@ -1,1 +1,1 @@
-"""Outbound ports. Swappable adapters live under fire.adapters."""
+"""Ports: Reasoner, Narrator, Notifier, OriginRegistry, ShapeCatalog."""

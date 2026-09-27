@@ -12,13 +12,13 @@ class EchoReasoner:
     async def decide(self, dossier: Dossier) -> Decision:
         possibilities: list[Possibility] = []
         for index, hop in enumerate(dossier.process_path.hops):
+            label = hop.display_label()
             possibilities.append(
                 Possibility(
                     id=f"hop-{index}",
-                    label=f"Failure near {hop.service}"
-                    + (f"/{hop.operation}" if hop.operation else ""),
+                    label=f"Failure near {label}",
                     probability=0.0,
-                    rationale_refs=[f"process_path:{hop.service}"],
+                    rationale_refs=[f"process_path:{label}"],
                 )
             )
         if dossier.missing:

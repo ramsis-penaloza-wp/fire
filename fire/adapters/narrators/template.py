@@ -21,10 +21,12 @@ class TemplateNarrator:
             lines.append(
                 f"• ({possibility.probability:.0%}) {possibility.label} _[{refs}]_"
             )
-        path = " → ".join(
-            hop.service + (f":{hop.operation}" if hop.operation else "")
-            for hop in dossier.process_path.hops
-        )
+        if dossier.origin is not None:
+            lines.append(
+                f"Origin: `{dossier.origin.origin_id}` "
+                f"({dossier.origin.kind}/{dossier.origin.endpoint_ref})"
+            )
+        path = " → ".join(hop.display_label() for hop in dossier.process_path.hops)
         if path:
             lines.append(f"Process path: `{path}`")
         if dossier.fingerprint is not None:

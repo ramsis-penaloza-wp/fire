@@ -20,8 +20,10 @@ from fire.core.domain.dossier import (
     ProcessPath,
     Shape,
     ShapeFingerprint,
+    ShapeRecord,
 )
 from fire.core.domain.incident import Incident
+from fire.core.domain.origin import Origin
 
 _container: Container | None = None
 
@@ -47,11 +49,12 @@ app = FastAPI(title="FIRE ENGINE", version="0.1.0", lifespan=lifespan)
 
 
 class DiagnoseRequest(BaseModel):
-    """Edge ingest — project-scoped; shape nested; no hard-coded system names."""
+    """Edge ingest — project-scoped; Origin + nested shape; hops by reference."""
 
     project_id: str
     service: str | None = None
     summary: str | None = None
+    origin: Origin | None = None
     shape: Shape | None = None
     fingerprint: ShapeFingerprint | None = None
     process_hops: list[ProcessHop] = Field(default_factory=list)
@@ -66,6 +69,22 @@ def _require_token(x_fire_token: str | None, token_env: str) -> None:
         )
     if not x_fire_token or x_fire_token != expected:
         raise HTTPException(status_code=401, detail="invalid or missing X-FIRE-Token")
+
+
+def _maybe_shape_record(
+    project_id: str,
+    origin: Origin | None,
+    shape: Shape | None,
+    fingerprint: ShapeFingerprint | None,
+) -> ShapeRecord | None:
+    if origin is None or shape is None or fingerprint is None:
+        return None
+    return ShapeRecord(
+        project_id=project_id,
+        origin_id=origin.origin_id,
+        shape=shape,
+        fingerprint=fingerprint,
+    )
 
 
 async def _run_pipeline(incident: Incident, dossier: Dossier) -> None:
@@ -95,7 +114,16 @@ async def diagnose(
     )
     shape = body.shape
     fingerprint = body.fingerprint
+    origin = body.origin
     missing: list[EvidenceFragment] = []
+    if origin is None:
+        missing.append(
+            EvidenceFragment(
+                collector="origin",
+                quality=EvidenceQuality.MISSING,
+                summary="No Origin (caja) provided",
+            )
+        )
     if shape is None and fingerprint is None:
         missing.append(
             EvidenceFragment(
@@ -116,8 +144,10 @@ async def diagnose(
         incident_id=incident_id,
         project_id=body.project_id,
         service=body.service,
+        origin=origin,
         shape=shape,
         fingerprint=fingerprint,
+        shape_record=_maybe_shape_record(body.project_id, origin, shape, fingerprint),
         process_path=ProcessPath(hops=list(body.process_hops)),
         missing=missing,
     )
@@ -127,4 +157,5 @@ async def diagnose(
         "incident_id": incident_id,
         "project_id": body.project_id,
         "service": body.service,
+        "origin_id": origin.origin_id if origin else None,
     }
