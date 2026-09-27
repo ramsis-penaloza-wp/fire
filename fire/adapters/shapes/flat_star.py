@@ -2,7 +2,7 @@
 
 Locked model (Project Ops 2026-09-27): homogeneous arrays share one template under
 `path[*].…`; mixed arrays use `path[*]#k.…`. Never emit `path[0]`…`path[N]` index paths, values, or fingerprints.
-Array cardinality may be observed len (null | void | int lock).
+Array cardinality is observed len as digit string ("2"); null | "void" | "n" aside.
 
 Leaf inference uses Pydantic TypeAdapter (UUID, EmailStr, AnyUrl, date, datetime,
 StrictInt) plus stdlib base64.b64decode(validate=True) for binary — no homemade
@@ -19,6 +19,7 @@ from uuid import UUID
 
 from pydantic import AnyUrl, EmailStr, StrictInt, TypeAdapter, ValidationError
 
+from fire.core.domain.cardinality_resolver import format_count
 from fire.core.domain.dossier import (
     Shape,
     ShapeField,
@@ -167,7 +168,7 @@ class FlatStarShapeGeneralizer:
                     ShapeField(
                         path=path,
                         value_type=ValueType.OBJECT,
-                        cardinality=1,
+                        cardinality="1",
                     )
                 )
             for key, child in sorted(value.items(), key=lambda kv: kv[0]):
@@ -178,7 +179,7 @@ class FlatStarShapeGeneralizer:
                 ShapeField(
                     path=path,
                     value_type=ValueType.ARRAY,
-                    cardinality=len(value),
+                    cardinality=format_count(len(value)),
                 )
             )
             if not value:
@@ -187,7 +188,7 @@ class FlatStarShapeGeneralizer:
             return
 
         leaf = _classify_leaf(value)
-        cardinality: int | None = None if leaf is ValueType.NULL else 1
+        cardinality: str | None = None if leaf is ValueType.NULL else "1"
         fields.append(
             ShapeField(path=path, value_type=leaf, cardinality=cardinality)
         )

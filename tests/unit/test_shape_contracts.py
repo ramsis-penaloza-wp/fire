@@ -14,12 +14,12 @@ from fire.core.domain.incident import Incident
 
 @pytest.mark.unit
 def test_shape_has_no_value_slot() -> None:
-    field = ShapeField(path="a.b", value_type=ValueType.NUMBER, cardinality=1)
+    field = ShapeField(path="a.b", value_type=ValueType.NUMBER, cardinality="1")
     assert not hasattr(field, "value")
     shape = Shape(fields=[field])
     assert shape.model_dump() == {
         "fields": [
-            {"path": "a.b", "value_type": "number", "cardinality": 1},
+            {"path": "a.b", "value_type": "number", "cardinality": "1"},
         ]
     }
 

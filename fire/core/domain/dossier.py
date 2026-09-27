@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Any, Literal
+from typing import Any
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -38,20 +38,21 @@ class ValueType(StrEnum):
     UNKNOWN = "unknown"
 
 
-# Shape cardinality: null | void | int (0…N). Legacy one/many/optional live only
-# in fire.core.domain.cardinality_resolver — never serialized on Shape.
-CardinalityValue = int | None | Literal["void"]
+# Shape cardinality: null | "void" | digit string "0"…"N" | "n" (unbounded).
+# Never a JSON int. Legacy one/many/optional live only in cardinality_resolver.
+CardinalityValue = str | None  # null | "void" | "0"…"N" | "n"
 
 
 class ShapeField(BaseModel):
     """One structural field: path + type + cardinality. Never a value.
 
-    cardinality is null | void | int (0…N). Array fields may carry observed len.
+    cardinality is null | "void" | "0"…"N" | "n" (unbounded). Arrays use
+    observed len as a digit string (e.g. len 2 → "2"). Never a typed int.
     """
 
     path: str
     value_type: ValueType = ValueType.UNKNOWN
-    cardinality: CardinalityValue = 1
+    cardinality: CardinalityValue = "1"
 
 
 class Shape(BaseModel):
