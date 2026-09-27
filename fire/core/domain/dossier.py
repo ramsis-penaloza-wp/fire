@@ -16,35 +16,49 @@ class EvidenceQuality(StrEnum):
 
 
 class ValueType(StrEnum):
-    """JSON-ish type labels for shape fields — not runtime values."""
+    """Formal leaf/structure types for ShapeField — never runtime values.
 
-    STRING = "string"
-    NUMBER = "number"
-    BOOLEAN = "boolean"
+    v0 set (Project Ops): structure + integer/number split + string refinements
+    inferred by form only. Media MIME (image/audio/video) is P1 — not here.
+    """
+
     OBJECT = "object"
     ARRAY = "array"
     NULL = "null"
+    BOOLEAN = "boolean"
+    INTEGER = "integer"
+    NUMBER = "number"  # float / non-int numeric
+    STRING = "string"
+    DATETIME = "datetime"
+    DATE = "date"
+    UUID = "uuid"
+    URI = "uri"
+    EMAIL = "email"
+    BINARY = "binary"  # stdlib base64 decode (validate=True); not MIME media
     UNKNOWN = "unknown"
 
 
-class Cardinality(StrEnum):
-    ONE = "one"
-    MANY = "many"
-    OPTIONAL = "optional"
+# Shape cardinality: null | "void" | digit string "0"…"N" | "n" (unbounded).
+# Never a JSON int. No legacy one/many/optional labels.
+CardinalityValue = str | None  # null | "void" | "0"…"N" | "n"
 
 
 class ShapeField(BaseModel):
-    """One structural field: path + type + cardinality. Never a value."""
+    """One structural field: path + type + cardinality. Never a value.
+
+    cardinality is null | "void" | "0"…"N" | "n" (unbounded). Arrays use
+    observed len as a digit string (e.g. len 2 → "2"). Never a typed int.
+    """
 
     path: str
     value_type: ValueType = ValueType.UNKNOWN
-    cardinality: Cardinality = Cardinality.ONE
+    cardinality: CardinalityValue = "1"
 
 
 class Shape(BaseModel):
     """Reusable structure description — keys/types/cardinality only.
 
-    Not a generalizer: assembling Shape from raw payloads is a future port.
+    Produced by ShapeGeneralizer (flat paths with [*] / #variant). Not a fingerprint.
     """
 
     fields: list[ShapeField] = Field(default_factory=list)
