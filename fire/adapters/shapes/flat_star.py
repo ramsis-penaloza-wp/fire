@@ -1,8 +1,8 @@
 """Flat-star ShapeGeneralizer: JSON → ShapeField paths with [*] / #variant.
 
 Locked model (Project Ops 2026-09-27): homogeneous arrays share one template under
-`path[*].…`; mixed arrays use `path[*]#k.…`. Never emit `path[0]`…`path[N]`,
-element counts, values, or fingerprints.
+`path[*].…`; mixed arrays use `path[*]#k.…`. Never emit `path[0]`…`path[N]` index paths, values, or fingerprints.
+Array cardinality may be observed len (null | void | int lock).
 
 Leaf inference uses Pydantic TypeAdapter (UUID, EmailStr, AnyUrl, date, datetime,
 StrictInt) plus stdlib base64.b64decode(validate=True) for binary — no homemade
@@ -20,7 +20,6 @@ from uuid import UUID
 from pydantic import AnyUrl, EmailStr, StrictInt, TypeAdapter, ValidationError
 
 from fire.core.domain.dossier import (
-    Cardinality,
     Shape,
     ShapeField,
     ValueType,
@@ -159,7 +158,7 @@ class FlatStarShapeGeneralizer:
                         ShapeField(
                             path=path,
                             value_type=ValueType.OBJECT,
-                            cardinality=Cardinality.ONE,
+                            cardinality="void",
                         )
                     )
                 return
@@ -168,7 +167,7 @@ class FlatStarShapeGeneralizer:
                     ShapeField(
                         path=path,
                         value_type=ValueType.OBJECT,
-                        cardinality=Cardinality.ONE,
+                        cardinality=1,
                     )
                 )
             for key, child in sorted(value.items(), key=lambda kv: kv[0]):
@@ -179,7 +178,7 @@ class FlatStarShapeGeneralizer:
                 ShapeField(
                     path=path,
                     value_type=ValueType.ARRAY,
-                    cardinality=Cardinality.MANY,
+                    cardinality=len(value),
                 )
             )
             if not value:
@@ -188,9 +187,7 @@ class FlatStarShapeGeneralizer:
             return
 
         leaf = _classify_leaf(value)
-        cardinality = (
-            Cardinality.OPTIONAL if leaf is ValueType.NULL else Cardinality.ONE
-        )
+        cardinality: int | None = None if leaf is ValueType.NULL else 1
         fields.append(
             ShapeField(path=path, value_type=leaf, cardinality=cardinality)
         )

@@ -8,18 +8,18 @@ from fastapi.testclient import TestClient
 from fire.apps.incident_engine.app import DiagnoseRequest, app
 import fire.apps.incident_engine.app as app_module
 from fire.apps.incident_engine.wiring import build_container
-from fire.core.domain.dossier import Cardinality, Shape, ShapeField, ValueType
+from fire.core.domain.dossier import Shape, ShapeField, ValueType
 from fire.core.domain.incident import Incident
 
 
 @pytest.mark.unit
 def test_shape_has_no_value_slot() -> None:
-    field = ShapeField(path="a.b", value_type=ValueType.NUMBER, cardinality=Cardinality.ONE)
+    field = ShapeField(path="a.b", value_type=ValueType.NUMBER, cardinality=1)
     assert not hasattr(field, "value")
     shape = Shape(fields=[field])
     assert shape.model_dump() == {
         "fields": [
-            {"path": "a.b", "value_type": "number", "cardinality": "one"},
+            {"path": "a.b", "value_type": "number", "cardinality": 1},
         ]
     }
 
