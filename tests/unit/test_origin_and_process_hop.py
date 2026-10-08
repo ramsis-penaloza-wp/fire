@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import is_protocol
+
 import pytest
 from pydantic import ValidationError
 
@@ -68,10 +70,8 @@ def test_process_hop_legacy_service_still_works() -> None:
 
 @pytest.mark.unit
 def test_ports_are_protocols_only() -> None:
-    assert OriginRegistry.__name__ == "OriginRegistry"
-    assert ShapeCatalog.__name__ == "ShapeCatalog"
-    # Protocols should not be instantiable as concrete stores
-    assert getattr(OriginRegistry, "_is_protocol", True) or True
+    assert is_protocol(OriginRegistry)
+    assert is_protocol(ShapeCatalog)
 
 
 @pytest.mark.unit
