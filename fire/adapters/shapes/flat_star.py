@@ -2,7 +2,7 @@
 
 Homogeneous arrays share one template under `path[*].…`; mixed arrays use
 `path[*]#k.…`. Never emit `path[0]`…`path[N]` index paths, values, or fingerprints.
-Array cardinality is observed len as digit string ("2"); null | "void" | "n" aside.
+Array cardinality is "0" when the array is empty and "n" otherwise, never its length.
 
 A string gets a refined type only in one exact form: a structural check (length, separator
 positions) followed by a stdlib or Pydantic parser. Any other string is `string`, so a field
@@ -216,7 +216,7 @@ class FlatStarShapeGeneralizer:
                 ShapeField(
                     path=path,
                     value_type=ValueType.ARRAY,
-                    cardinality=str(len(value)),
+                    cardinality="n" if value else "0",
                 )
             )
             if not value:

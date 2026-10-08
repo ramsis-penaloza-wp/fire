@@ -55,17 +55,37 @@ def test_homogeneous_order_lines(engine: FlatStarShapeGeneralizer) -> None:
     }
     paths = _paths(engine.generalize(payload))
     assert paths["order_id"] == ("string", "1")
-    assert paths["lines"] == ("array", "2")
+    assert paths["lines"] == ("array", "n")
     assert paths["lines[*].qty"] == ("integer", "1")
     assert paths["lines[*].sku"] == ("string", "1")
-    assert isinstance(paths["lines"][1], str)
     assert "lines[0]" not in paths
+
+
+@pytest.mark.unit
+def test_array_length_does_not_change_the_shape(engine: FlatStarShapeGeneralizer) -> None:
+    def order(line_count: int) -> dict[str, object]:
+        lines = [{"sku": f"sku-{index}", "qty": index} for index in range(line_count)]
+        return {"order_id": "x", "lines": lines}
+
+    shapes = [engine.generalize(order(line_count)) for line_count in (1, 2, 3, 10)]
+    assert all(shape == shapes[0] for shape in shapes)
+
+
+@pytest.mark.unit
+def test_array_cardinality_is_zero_only_when_every_sample_is_empty(
+    engine: FlatStarShapeGeneralizer,
+) -> None:
+    assert _paths(engine.generalize({"xs": []})) == {"xs": ("array", "0")}
+    assert _paths(engine.generalize({"xs": [[], []]})) == {
+        "xs": ("array", "n"),
+        "xs[*]": ("array", "0"),
+    }
 
 
 @pytest.mark.unit
 def test_mixed_scalars_and_object(engine: FlatStarShapeGeneralizer) -> None:
     paths = _paths(engine.generalize({"events": [1, "a", {}]}))
-    assert paths["events"] == ("array", "3")
+    assert paths["events"] == ("array", "n")
     assert paths["events[*]#0"] == ("integer", "1")
     assert paths["events[*]#1"] == ("string", "1")
     assert paths["events[*]#2"] == ("object", "void")
@@ -75,15 +95,15 @@ def test_mixed_scalars_and_object(engine: FlatStarShapeGeneralizer) -> None:
 def test_mixed_object_variants(engine: FlatStarShapeGeneralizer) -> None:
     payload = {"events": [{"type": "n", "n": 1}, {"type": "m", "msg": "x"}]}
     paths = _paths(engine.generalize(payload))
-    assert paths["events"] == ("array", "2")
+    assert paths["events"] == ("array", "n")
     assert paths["events[*]#0.n"] == ("integer", "1")
 
 
 @pytest.mark.unit
 def test_array_of_arrays_homogeneous(engine: FlatStarShapeGeneralizer) -> None:
     paths = _paths(engine.generalize({"matrix": [[1, 2], [3, 4]]}))
-    assert paths["matrix"] == ("array", "2")
-    assert paths["matrix[*]"] == ("array", "2")
+    assert paths["matrix"] == ("array", "n")
+    assert paths["matrix[*]"] == ("array", "n")
     assert paths["matrix[*][*]"] == ("integer", "1")
 
 
@@ -99,14 +119,14 @@ def test_structural_equality_ignores_key_order(engine: FlatStarShapeGeneralizer)
 def test_no_values_in_shape(engine: FlatStarShapeGeneralizer) -> None:
     shape = engine.generalize({"n": 99, "items": [1, 1, 1, 1]})
     assert "99" not in str(shape.model_dump())
-    assert _paths(shape)["items"] == ("array", "4")
+    assert _paths(shape)["items"] == ("array", "n")
 
 
 @pytest.mark.unit
 def test_homogeneous_rows_different_lengths(engine: FlatStarShapeGeneralizer) -> None:
     paths = _paths(engine.generalize({"matrix": [[1], [1, 2, 3]]}))
-    assert paths["matrix"] == ("array", "2")
-    assert paths["matrix[*]"] == ("array", "1")
+    assert paths["matrix"] == ("array", "n")
+    assert paths["matrix[*]"] == ("array", "n")
     assert paths["matrix[*][*]"] == ("integer", "1")
     assert not any("#" in p for p in paths)
 
@@ -249,12 +269,12 @@ def test_value_type_is_formal_enum() -> None:
 
 
 @pytest.mark.unit
-def test_cardinality_null_void_digit_strings(engine: FlatStarShapeGeneralizer) -> None:
-    paths = _paths(engine.generalize({"a": None, "empty": {}, "n": 1, "xs": [1, 2]}))
+def test_cardinality_vocabulary(engine: FlatStarShapeGeneralizer) -> None:
+    paths = _paths(engine.generalize({"a": None, "empty": {}, "n": 1, "none": [], "xs": [1, 2]}))
     assert paths["a"] == ("null", None)
     assert paths["empty"] == ("object", "void")
     assert paths["n"] == ("integer", "1")
-    assert paths["xs"] == ("array", "2")
+    assert paths["none"] == ("array", "0")
+    assert paths["xs"] == ("array", "n")
     dumped = engine.generalize({"xs": [1, 2]}).model_dump()
-    assert dumped["fields"][0]["cardinality"] == "2"
-    assert isinstance(dumped["fields"][0]["cardinality"], str)
+    assert dumped["fields"][0]["cardinality"] == "n"

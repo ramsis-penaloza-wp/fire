@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Any
+from typing import Annotated, Any
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -39,16 +39,16 @@ class ValueType(StrEnum):
     UNKNOWN = "unknown"
 
 
-# Shape cardinality: null | "void" | digit string "0"…"N" | "n" (unbounded).
-# Never a JSON int. No legacy one/many/optional labels.
-CardinalityValue = str | None  # null | "void" | "0"…"N" | "n"
+CardinalityValue = Annotated[str, Field(pattern=r"^(void|n|0|[1-9][0-9]*)$")] | None
 
 
 class ShapeField(BaseModel):
     """One structural field: path + type + cardinality. Never a value.
 
-    cardinality is null | "void" | "0"…"N" | "n" (unbounded). Arrays use
-    observed len as a digit string (e.g. len 2 → "2"). Never a typed int.
+    cardinality is null, "void", "n" (any number), or a non-negative integer as a digit
+    string without leading zeros ("0", "1", "42"); never a JSON number. The generalizer
+    emits null for null, "void" for an object that is always empty and "1" otherwise, "0"
+    for an array that is always empty and "n" otherwise, and "1" for every other leaf.
     """
 
     path: str
