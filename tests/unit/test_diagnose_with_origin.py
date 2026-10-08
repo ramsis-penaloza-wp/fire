@@ -87,6 +87,26 @@ def test_diagnose_declares_missing_evidence_as_fragments(
 
 
 @pytest.mark.unit
+def test_diagnose_shape_without_fingerprint_declares_missing_fingerprint(
+    client: TestClient, dossiers: list[Dossier]
+) -> None:
+    response = client.post(
+        "/v0/diagnose",
+        json={
+            "project_id": "proj-a",
+            "origin": {"origin_id": "orig-orders", "endpoint_ref": "orders.create"},
+            "shape": {"fields": [{"path": "order.id", "value_type": "string"}]},
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 202
+    [dossier] = dossiers
+    assert [(f.collector, f.summary) for f in dossier.missing] == [
+        ("fingerprint", "Shape present without a fingerprint"),
+    ]
+
+
+@pytest.mark.unit
 def test_diagnose_accepts_node_and_edge_hops(client: TestClient, dossiers: list[Dossier]) -> None:
     response = client.post(
         "/v0/diagnose",

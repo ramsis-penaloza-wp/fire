@@ -123,7 +123,7 @@ async def diagnose(
             EvidenceFragment(
                 collector="fingerprint",
                 quality=EvidenceQuality.MISSING,
-                summary="Shape present without stable fingerprint (generalizer is a future port)",
+                summary="Shape present without a fingerprint",
             )
         )
     dossier = Dossier(
