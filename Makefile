@@ -1,9 +1,13 @@
-.PHONY: install lint test run
+.PHONY: install fmt lint test run
 
 install:
 	uv sync --group dev
 
+fmt:
+	uv run ruff format .
+
 lint:
+	uv run ruff format --check .
 	uv run ruff check .
 
 test:
