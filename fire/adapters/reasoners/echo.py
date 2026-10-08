@@ -41,9 +41,9 @@ class EchoReasoner:
                 )
             )
 
-        n = len(possibilities)
+        probability = 1.0 / len(possibilities)
         for possibility in possibilities:
-            possibility.probability = round(1.0 / n, 4)
+            possibility.probability = probability
 
         has_structure = dossier.shape is not None or dossier.fingerprint is not None
         confidence = 0.2 if missing or not has_structure else 0.45

@@ -61,6 +61,24 @@ async def test_echo_missing_fragment_adds_insufficient_evidence_and_sets_noul() 
 
 @pytest.mark.unit
 @pytest.mark.asyncio
+async def test_echo_splits_probability_evenly_without_rounding() -> None:
+    dossier = Dossier(
+        incident_id="inc-1",
+        project_id="example",
+        fingerprint=ShapeFingerprint(schema_hash="abc"),
+        process_path=ProcessPath(hops=[ProcessHop(ref="api"), ProcessHop(ref="db")]),
+        fragments=[
+            EvidenceFragment(
+                collector="origin", quality=EvidenceQuality.MISSING, summary="No Origin provided"
+            )
+        ],
+    )
+    decision = await EchoReasoner().decide(dossier)
+    assert [p.probability for p in decision.possibilities] == [1 / 3, 1 / 3, 1 / 3]
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
 async def test_echo_present_fragments_are_not_missing_evidence() -> None:
     dossier = Dossier(
         incident_id="inc-1",
