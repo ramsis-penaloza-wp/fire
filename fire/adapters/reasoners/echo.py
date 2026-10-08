@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fire.core.domain.decision import Decision, Possibility
+from fire.core.domain.decision import Decision, Possibility, Primitive
 from fire.core.domain.dossier import Dossier
 
 
@@ -54,5 +54,5 @@ class EchoReasoner:
             possibilities=possibilities,
             confidence=confidence,
             noul=noul,
-            primitive="noul" if noul else "choice",
+            primitive=Primitive.NOUL if noul else Primitive.CHOICE,
         )

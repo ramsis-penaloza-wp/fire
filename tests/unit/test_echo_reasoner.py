@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from fire.adapters.reasoners.echo import EchoReasoner
+from fire.core.domain.decision import Primitive
 from fire.core.domain.dossier import (
     Dossier,
     EvidenceFragment,
@@ -31,6 +32,7 @@ async def test_echo_with_shape_and_fingerprint() -> None:
     )
     decision = await EchoReasoner().decide(dossier)
     assert decision.noul is False
+    assert decision.primitive is Primitive.CHOICE
     assert decision.confidence >= 0.3
     assert any(p.id.startswith("hop-") for p in decision.possibilities)
 
@@ -54,6 +56,7 @@ async def test_echo_missing_fragment_adds_insufficient_evidence_and_sets_noul() 
     assert [p.rationale_refs for p in insufficient] == [["origin"]]
     assert decision.confidence == 0.2
     assert decision.noul is True
+    assert decision.primitive is Primitive.NOUL
 
 
 @pytest.mark.unit

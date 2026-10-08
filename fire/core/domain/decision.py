@@ -2,7 +2,17 @@
 
 from __future__ import annotations
 
+from enum import StrEnum
+
 from pydantic import BaseModel, Field
+
+
+class Primitive(StrEnum):
+    """System One primitive a reasoner used to reach the decision."""
+
+    CHOICE = "choice"
+    SCORE = "score"
+    NOUL = "noul"
 
 
 class Possibility(BaseModel):
@@ -27,7 +37,7 @@ class Decision(BaseModel):
         default=False,
         description="Privacy/insufficient-evidence gate: do not narrate as settled cause.",
     )
-    primitive: str = Field(
-        default="choice",
-        description="System One primitive used: choice | score | noul.",
+    primitive: Primitive = Field(
+        default=Primitive.CHOICE,
+        description="System One primitive used.",
     )
