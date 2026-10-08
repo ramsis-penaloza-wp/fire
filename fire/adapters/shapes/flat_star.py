@@ -1,8 +1,12 @@
-"""Flat-star ShapeGeneralizer: JSON → ShapeField paths with [*] / #variant.
+"""Flat-star ShapeGeneralizer: JSON → flat ShapeField paths, with `[*]` for array elements.
 
-Homogeneous arrays share one template under `path[*].…`; mixed arrays use
-`path[*]#k.…`. Never emit `path[0]`…`path[N]` index paths, values, or fingerprints.
-Array cardinality is "0" when the array is empty and "n" otherwise, never its length.
+Every value seen at a path is a sample of it. All elements of all arrays at `p` are samples
+of `p[*]`, and the object samples at a path merge into one template whose keys are the union
+of theirs; a key that some object sample lacks is optional. A path carries one field per
+distinct value type. Array cardinality is "0" when every sample is empty and "n" otherwise,
+never a length; object cardinality is "void" when every sample is empty and "1" otherwise.
+The result holds no index paths, values, or fingerprints, and does not depend on element or
+key order.
 
 A string gets a refined type only in one exact form: a structural check (length, separator
 positions) followed by a stdlib or Pydantic parser. Any other string is `string`, so a field
@@ -11,7 +15,6 @@ keeps its type whatever its value. Contract: docs/specs/shape-generalizer.md.
 
 from __future__ import annotations
 
-import re
 from collections.abc import Callable
 from datetime import date, datetime
 from typing import Any
@@ -129,37 +132,6 @@ def _classify_leaf(value: Any) -> ValueType:
     return ValueType.UNKNOWN
 
 
-def _structural_signature(value: Any) -> tuple[Any, ...]:
-    """Canonical structural id for equality (keys sorted; no values).
-
-    Arrays are length-agnostic: homogeneous → ("array", element_sig);
-    mixed → ("array", ("mixed", unique_element_sigs…)). Never encode length.
-    Leaf sig uses ValueType so integer ≠ number and uuid ≠ string.
-    """
-    if isinstance(value, dict):
-        return (
-            "object",
-            tuple(
-                (key, _structural_signature(child))
-                for key, child in sorted(value.items(), key=lambda kv: kv[0])
-            ),
-        )
-    if isinstance(value, list):
-        if not value:
-            return ("array", ("empty",))
-        unique: list[tuple[Any, ...]] = []
-        seen: set[tuple[Any, ...]] = set()
-        for item in value:
-            sig = _structural_signature(item)
-            if sig not in seen:
-                seen.add(sig)
-                unique.append(sig)
-        if len(unique) == 1:
-            return ("array", unique[0])
-        return ("array", ("mixed", tuple(unique)))
-    return (_classify_leaf(value).value,)
-
-
 def _child_path(prefix: str, key: str) -> str:
     return f"{prefix}.{key}" if prefix else key
 
@@ -168,78 +140,72 @@ def _star_path(prefix: str) -> str:
     return f"{prefix}[*]" if prefix else "[*]"
 
 
-def _variant_path(prefix: str, index: int) -> str:
-    return f"{prefix}[*]#{index}" if prefix else f"[*]#{index}"
+type _Fields = dict[tuple[str, ValueType], ShapeField]
+
+_EMPTY_CARDINALITIES = frozenset({"void", "0"})
 
 
-def _is_array_element_slot(path: str) -> bool:
-    """True for paths ending in `[*]` or `[*]#k`."""
-    if not path:
-        return False
-    return bool(re.search(r"\[\*\](#\d+)?$", path))
+def _add(
+    fields: _Fields,
+    path: str,
+    value_type: ValueType,
+    *,
+    cardinality: str | None,
+    optional: bool,
+) -> None:
+    """Keep one field per (path, value_type).
+
+    Keys are not escaped, so a key holding `.` or `[*]` can land on a nested key's path. The
+    merged field is optional only if both are, and populated if either is.
+    """
+    earlier = fields.get((path, value_type))
+    if earlier is not None:
+        optional = optional and earlier.optional
+        if cardinality in _EMPTY_CARDINALITIES:
+            cardinality = earlier.cardinality
+    fields[path, value_type] = ShapeField(
+        path=path, value_type=value_type, cardinality=cardinality, optional=optional
+    )
+
+
+def _walk(samples: list[Any], path: str, optional: bool, fields: _Fields) -> None:
+    """Emit one field per value type among `samples`, every value seen at `path`."""
+    objects = [sample for sample in samples if isinstance(sample, dict)]
+    arrays = [sample for sample in samples if isinstance(sample, list)]
+    leaves = {_classify_leaf(sample) for sample in samples if not isinstance(sample, dict | list)}
+    for leaf in leaves:
+        cardinality = None if leaf is ValueType.NULL else "1"
+        _add(fields, path, leaf, cardinality=cardinality, optional=optional)
+    if objects:
+        _walk_objects(objects, path, optional, fields)
+    if arrays:
+        _walk_arrays(arrays, path, optional, fields)
+
+
+def _walk_objects(
+    objects: list[dict[str, Any]], path: str, optional: bool, fields: _Fields
+) -> None:
+    """The root object emits no field of its own; its keys start the paths."""
+    if path:
+        cardinality = "1" if any(objects) else "void"
+        _add(fields, path, ValueType.OBJECT, cardinality=cardinality, optional=optional)
+    for key in set().union(*objects):
+        present = [obj[key] for obj in objects if key in obj]
+        _walk(present, _child_path(path, key), len(present) < len(objects), fields)
+
+
+def _walk_arrays(arrays: list[list[Any]], path: str, optional: bool, fields: _Fields) -> None:
+    cardinality = "n" if any(arrays) else "0"
+    _add(fields, path, ValueType.ARRAY, cardinality=cardinality, optional=optional)
+    elements = [element for array in arrays for element in array]
+    if elements:
+        _walk(elements, _star_path(path), False, fields)
 
 
 class FlatStarShapeGeneralizer:
-    """Pure adapter: walk JSON, emit deduped flat Shape fields."""
+    """Pure adapter: merge every value seen at a path into flat, sorted Shape fields."""
 
     def generalize(self, payload: Any) -> Shape:
-        fields: list[ShapeField] = []
-        self._walk(payload, "", fields)
-        fields.sort(key=lambda field: field.path)
-        return Shape(fields=fields)
-
-    def _walk(self, value: Any, path: str, fields: list[ShapeField]) -> None:
-        if isinstance(value, dict):
-            if not value:
-                if path:
-                    fields.append(
-                        ShapeField(
-                            path=path,
-                            value_type=ValueType.OBJECT,
-                            cardinality="void",
-                        )
-                    )
-                return
-            if path and not _is_array_element_slot(path):
-                fields.append(
-                    ShapeField(
-                        path=path,
-                        value_type=ValueType.OBJECT,
-                        cardinality="1",
-                    )
-                )
-            for key, child in sorted(value.items(), key=lambda kv: kv[0]):
-                self._walk(child, _child_path(path, key), fields)
-            return
-        if isinstance(value, list):
-            fields.append(
-                ShapeField(
-                    path=path,
-                    value_type=ValueType.ARRAY,
-                    cardinality="n" if value else "0",
-                )
-            )
-            if not value:
-                return
-            self._walk_array_elements(value, path, fields)
-            return
-
-        leaf = _classify_leaf(value)
-        cardinality: str | None = None if leaf is ValueType.NULL else "1"
-        fields.append(ShapeField(path=path, value_type=leaf, cardinality=cardinality))
-
-    def _walk_array_elements(self, items: list[Any], path: str, fields: list[ShapeField]) -> None:
-        order: list[tuple[Any, ...]] = []
-        representatives: dict[tuple[Any, ...], Any] = {}
-        for item in items:
-            sig = _structural_signature(item)
-            if sig not in representatives:
-                representatives[sig] = item
-                order.append(sig)
-
-        if len(order) == 1:
-            self._walk(representatives[order[0]], _star_path(path), fields)
-            return
-
-        for index, sig in enumerate(order):
-            self._walk(representatives[sig], _variant_path(path, index), fields)
+        fields: _Fields = {}
+        _walk([payload], "", False, fields)
+        return Shape(fields=[fields[key] for key in sorted(fields)])

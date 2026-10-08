@@ -43,23 +43,28 @@ CardinalityValue = Annotated[str, Field(pattern=r"^(void|n|0|[1-9][0-9]*)$")] | 
 
 
 class ShapeField(BaseModel):
-    """One structural field: path + type + cardinality. Never a value.
+    """One structural field: path + type + cardinality + optional. Never a value.
 
     cardinality is null, "void", "n" (any number), or a non-negative integer as a digit
     string without leading zeros ("0", "1", "42"); never a JSON number. The generalizer
     emits null for null, "void" for an object that is always empty and "1" otherwise, "0"
     for an array that is always empty and "n" otherwise, and "1" for every other leaf.
+
+    optional is true when the key may be absent: some object at the parent path lacks it.
+    It is relative to the parent, so fields below an optional key judge their own keys only.
     """
 
     path: str
     value_type: ValueType = ValueType.UNKNOWN
     cardinality: CardinalityValue = "1"
+    optional: bool = False
 
 
 class Shape(BaseModel):
     """Reusable structure description — keys/types/cardinality only.
 
-    Produced by ShapeGeneralizer (flat paths with [*] / #variant). Not a fingerprint.
+    Produced by ShapeGeneralizer: flat paths with [*] for array elements, one field per
+    (path, value_type), sorted by that pair. Not a fingerprint.
     """
 
     fields: list[ShapeField] = Field(default_factory=list)

@@ -1,21 +1,48 @@
-"""Shape engine v0: flat paths + [*] / #variant (no fingerprint)."""
+"""FlatStarShapeGeneralizer against docs/specs/shape-generalizer.md."""
 
 from __future__ import annotations
+
+from collections.abc import Iterator
+from itertools import permutations, product
 
 import pytest
 
 from fire.adapters.shapes.flat_star import FlatStarShapeGeneralizer
-from fire.core.domain.dossier import ValueType
+from fire.core.domain.dossier import Shape, ValueType
 from fire.core.ports.shape_generalizer import ShapeGeneralizer
 
+type Row = tuple[str, str, str | None, bool]
 
-def _paths(shape) -> dict[str, tuple[str, object]]:
+
+def _paths(shape: Shape) -> dict[str, tuple[str, object]]:
     return {field.path: (field.value_type.value, field.cardinality) for field in shape.fields}
+
+
+def _rows(shape: Shape) -> list[Row]:
+    return [
+        (field.path, field.value_type.value, field.cardinality, field.optional)
+        for field in shape.fields
+    ]
 
 
 def _leaf_type(engine: FlatStarShapeGeneralizer, value: object) -> str:
     [field] = engine.generalize({"x": value}).fields
     return field.value_type.value
+
+
+def _reorderings(value: object) -> Iterator[object]:
+    """Every arrangement of `value` with array elements and keys permuted at every depth."""
+    if isinstance(value, dict):
+        for items in permutations(value.items()):
+            keys = [key for key, _ in items]
+            for children in product(*(_reorderings(child) for _, child in items)):
+                yield dict(zip(keys, children, strict=True))
+    elif isinstance(value, list):
+        for elements in permutations(value):
+            for children in product(*(_reorderings(element) for element in elements)):
+                yield list(children)
+    else:
+        yield value
 
 
 @pytest.fixture
@@ -35,16 +62,26 @@ def test_empty_object_root(engine: FlatStarShapeGeneralizer) -> None:
 
 @pytest.mark.unit
 def test_empty_array_root(engine: FlatStarShapeGeneralizer) -> None:
-    shape = engine.generalize([])
-    assert _paths(shape) == {"": ("array", "0")}
-    assert all("[0]" not in f.path for f in shape.fields)
+    assert _rows(engine.generalize([])) == [("", "array", "0", False)]
+
+
+@pytest.mark.unit
+def test_root_array_of_objects(engine: FlatStarShapeGeneralizer) -> None:
+    assert _rows(engine.generalize([{"a": 1}, {"a": 2}])) == [
+        ("", "array", "n", False),
+        ("[*]", "object", "1", False),
+        ("[*].a", "integer", "1", False),
+    ]
+
+
+@pytest.mark.unit
+def test_root_scalar(engine: FlatStarShapeGeneralizer) -> None:
+    assert _rows(engine.generalize("x")) == [("", "string", "1", False)]
 
 
 @pytest.mark.unit
 def test_null_leaf(engine: FlatStarShapeGeneralizer) -> None:
-    paths = _paths(engine.generalize({"a": None}))
-    assert paths["a"] == ("null", None)
-    assert "b" not in paths
+    assert _rows(engine.generalize({"a": None})) == [("a", "null", None, False)]
 
 
 @pytest.mark.unit
@@ -53,12 +90,31 @@ def test_homogeneous_order_lines(engine: FlatStarShapeGeneralizer) -> None:
         "order_id": "x",
         "lines": [{"sku": "a", "qty": 1}, {"sku": "b", "qty": 2}],
     }
-    paths = _paths(engine.generalize(payload))
-    assert paths["order_id"] == ("string", "1")
-    assert paths["lines"] == ("array", "n")
-    assert paths["lines[*].qty"] == ("integer", "1")
-    assert paths["lines[*].sku"] == ("string", "1")
-    assert "lines[0]" not in paths
+    assert _rows(engine.generalize(payload)) == [
+        ("lines", "array", "n", False),
+        ("lines[*]", "object", "1", False),
+        ("lines[*].qty", "integer", "1", False),
+        ("lines[*].sku", "string", "1", False),
+        ("order_id", "string", "1", False),
+    ]
+
+
+@pytest.mark.unit
+def test_key_missing_from_one_element_is_optional(engine: FlatStarShapeGeneralizer) -> None:
+    payload = {"lines": [{"sku": "a"}, {"sku": "b", "gift": True}]}
+    assert _rows(engine.generalize(payload)) == [
+        ("lines", "array", "n", False),
+        ("lines[*]", "object", "1", False),
+        ("lines[*].gift", "boolean", "1", True),
+        ("lines[*].sku", "string", "1", False),
+    ]
+
+
+@pytest.mark.unit
+def test_element_order_does_not_change_the_shape(engine: FlatStarShapeGeneralizer) -> None:
+    first = engine.generalize({"lines": [{"sku": "a"}, {"sku": "b", "gift": True}]})
+    swapped = engine.generalize({"lines": [{"sku": "b", "gift": True}, {"sku": "a"}]})
+    assert swapped == first
 
 
 @pytest.mark.unit
@@ -84,35 +140,129 @@ def test_array_cardinality_is_zero_only_when_every_sample_is_empty(
 
 @pytest.mark.unit
 def test_mixed_scalars_and_object(engine: FlatStarShapeGeneralizer) -> None:
-    paths = _paths(engine.generalize({"events": [1, "a", {}]}))
-    assert paths["events"] == ("array", "n")
-    assert paths["events[*]#0"] == ("integer", "1")
-    assert paths["events[*]#1"] == ("string", "1")
-    assert paths["events[*]#2"] == ("object", "void")
+    assert _rows(engine.generalize({"events": [1, "a", {}]})) == [
+        ("events", "array", "n", False),
+        ("events[*]", "integer", "1", False),
+        ("events[*]", "object", "void", False),
+        ("events[*]", "string", "1", False),
+    ]
 
 
 @pytest.mark.unit
 def test_mixed_object_variants(engine: FlatStarShapeGeneralizer) -> None:
     payload = {"events": [{"type": "n", "n": 1}, {"type": "m", "msg": "x"}]}
-    paths = _paths(engine.generalize(payload))
-    assert paths["events"] == ("array", "n")
-    assert paths["events[*]#0.n"] == ("integer", "1")
+    assert _rows(engine.generalize(payload)) == [
+        ("events", "array", "n", False),
+        ("events[*]", "object", "1", False),
+        ("events[*].msg", "string", "1", True),
+        ("events[*].n", "integer", "1", True),
+        ("events[*].type", "string", "1", False),
+    ]
+
+
+@pytest.mark.unit
+def test_null_and_string_under_one_key(engine: FlatStarShapeGeneralizer) -> None:
+    assert _rows(engine.generalize([{"a": None}, {"a": "x"}, {}])) == [
+        ("", "array", "n", False),
+        ("[*]", "object", "1", False),
+        ("[*].a", "null", None, True),
+        ("[*].a", "string", "1", True),
+    ]
+
+
+@pytest.mark.unit
+def test_object_cardinality_is_void_only_when_every_sample_is_empty(
+    engine: FlatStarShapeGeneralizer,
+) -> None:
+    assert _rows(engine.generalize({"xs": [{}, {}]})) == [
+        ("xs", "array", "n", False),
+        ("xs[*]", "object", "void", False),
+    ]
+    assert _rows(engine.generalize({"xs": [{}, {"a": 1}]})) == [
+        ("xs", "array", "n", False),
+        ("xs[*]", "object", "1", False),
+        ("xs[*].a", "integer", "1", True),
+    ]
+
+
+@pytest.mark.unit
+def test_optional_is_relative_to_the_parent(engine: FlatStarShapeGeneralizer) -> None:
+    payload = {"xs": [{"addr": {"zip": "10001"}}, {}]}
+    assert _rows(engine.generalize(payload)) == [
+        ("xs", "array", "n", False),
+        ("xs[*]", "object", "1", False),
+        ("xs[*].addr", "object", "1", True),
+        ("xs[*].addr.zip", "string", "1", False),
+    ]
 
 
 @pytest.mark.unit
 def test_array_of_arrays_homogeneous(engine: FlatStarShapeGeneralizer) -> None:
-    paths = _paths(engine.generalize({"matrix": [[1, 2], [3, 4]]}))
-    assert paths["matrix"] == ("array", "n")
-    assert paths["matrix[*]"] == ("array", "n")
-    assert paths["matrix[*][*]"] == ("integer", "1")
+    assert _rows(engine.generalize({"matrix": [[1, 2], [3, 4]]})) == [
+        ("matrix", "array", "n", False),
+        ("matrix[*]", "array", "n", False),
+        ("matrix[*][*]", "integer", "1", False),
+    ]
+
+
+@pytest.mark.unit
+def test_nested_arrays_pool_their_elements(engine: FlatStarShapeGeneralizer) -> None:
+    payload = {"matrix": [[1], [], ["a", {"k": 1}], [{"k": 2, "z": None}]]}
+    assert _rows(engine.generalize(payload)) == [
+        ("matrix", "array", "n", False),
+        ("matrix[*]", "array", "n", False),
+        ("matrix[*][*]", "integer", "1", False),
+        ("matrix[*][*]", "object", "1", False),
+        ("matrix[*][*]", "string", "1", False),
+        ("matrix[*][*].k", "integer", "1", False),
+        ("matrix[*][*].z", "null", None, True),
+    ]
 
 
 @pytest.mark.unit
 def test_structural_equality_ignores_key_order(engine: FlatStarShapeGeneralizer) -> None:
-    payload = {"lines": [{"qty": 1, "sku": "a"}, {"sku": "b", "qty": 2}]}
-    paths = _paths(engine.generalize(payload))
-    assert "lines[*].sku" in paths
-    assert not any("#" in p for p in paths)
+    first = engine.generalize({"lines": [{"qty": 1, "sku": "a"}, {"sku": "b", "qty": 2}]})
+    second = engine.generalize({"lines": [{"sku": "a", "qty": 1}, {"qty": 2, "sku": "b"}]})
+    assert second == first
+    assert "lines[*].sku" in _paths(first)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"lines": [{"sku": "a"}, {"sku": "b", "gift": True}, {"qty": 1, "sku": "c"}]},
+        {"xs": [1, "a", {}, None, [2]]},
+        [{"a": None}, {"a": "x"}, {"a": {"b": 1}}, {}],
+        {"m": [[1], [], ["a", {"k": 1, "z": None}]], "id": "x"},
+    ],
+)
+def test_shape_is_independent_of_element_and_key_order(
+    engine: FlatStarShapeGeneralizer, payload: object
+) -> None:
+    shapes = [engine.generalize(variant) for variant in _reorderings(payload)]
+    assert len(shapes) > 1
+    assert all(shape == shapes[0] for shape in shapes)
+
+
+@pytest.mark.unit
+def test_fields_are_sorted_by_path_and_type_without_duplicates(
+    engine: FlatStarShapeGeneralizer,
+) -> None:
+    payload = {"z": [{"b": 1}, {"b": "x"}, 3], "a": {"c": None}, "m": [[{}], ["s"]]}
+    keys = [(field.path, field.value_type) for field in engine.generalize(payload).fields]
+    assert keys == sorted(set(keys))
+
+
+@pytest.mark.unit
+def test_colliding_paths_merge_into_one_field(engine: FlatStarShapeGeneralizer) -> None:
+    assert _rows(engine.generalize({"a.b": {}, "a": {"b": {"c": 1}}})) == [
+        ("a", "object", "1", False),
+        ("a.b", "object", "1", False),
+        ("a.b.c", "integer", "1", False),
+    ]
+    payload = {"xs": [{"a.b": 1, "a": {"b": 2}}, {"a": {"b": 3}}]}
+    assert ("xs[*].a.b", "integer", "1", False) in _rows(engine.generalize(payload))
 
 
 @pytest.mark.unit
@@ -124,11 +274,11 @@ def test_no_values_in_shape(engine: FlatStarShapeGeneralizer) -> None:
 
 @pytest.mark.unit
 def test_homogeneous_rows_different_lengths(engine: FlatStarShapeGeneralizer) -> None:
-    paths = _paths(engine.generalize({"matrix": [[1], [1, 2, 3]]}))
-    assert paths["matrix"] == ("array", "n")
-    assert paths["matrix[*]"] == ("array", "n")
-    assert paths["matrix[*][*]"] == ("integer", "1")
-    assert not any("#" in p for p in paths)
+    assert _rows(engine.generalize({"matrix": [[1], [1, 2, 3]]})) == [
+        ("matrix", "array", "n", False),
+        ("matrix[*]", "array", "n", False),
+        ("matrix[*][*]", "integer", "1", False),
+    ]
 
 
 @pytest.mark.unit
