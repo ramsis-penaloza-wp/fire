@@ -1,4 +1,4 @@
-"""Option A: Origin, ShapeRecord, ProcessHop by reference."""
+"""Origin, ShapeRecord, and by-reference ProcessHop contracts."""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""Edge accepts Origin + ShapeRecord assembly on diagnose."""
+"""POST /v0/diagnose accepts an Origin and assembles a ShapeRecord."""
 
 from __future__ import annotations
 
