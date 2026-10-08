@@ -51,7 +51,8 @@ class ShapeField(BaseModel):
     for an array that is always empty and "n" otherwise, and "1" for every other leaf.
 
     optional is true when the key may be absent: some object at the parent path lacks it.
-    It is relative to the parent, so fields below an optional key judge their own keys only.
+    It is relative to that parent, so a field under an optional key is optional only when
+    some object at its own parent path lacks it.
     """
 
     path: str
@@ -61,7 +62,7 @@ class ShapeField(BaseModel):
 
 
 class Shape(BaseModel):
-    """Reusable structure description — keys/types/cardinality only.
+    """Reusable structure description — keys, types, cardinality, and optionality only.
 
     Produced by ShapeGeneralizer: flat paths with [*] for array elements, one field per
     (path, value_type), sorted by that pair. Not a fingerprint.
