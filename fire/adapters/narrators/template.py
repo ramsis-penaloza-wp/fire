@@ -18,9 +18,7 @@ class TemplateNarrator:
         ]
         for possibility in decision.possibilities:
             refs = ", ".join(possibility.rationale_refs) or "—"
-            lines.append(
-                f"• ({possibility.probability:.0%}) {possibility.label} _[{refs}]_"
-            )
+            lines.append(f"• ({possibility.probability:.0%}) {possibility.label} _[{refs}]_")
         if dossier.origin is not None:
             lines.append(
                 f"Origin: `{dossier.origin.origin_id}` "

@@ -88,12 +88,8 @@ class ProcessHop(BaseModel):
     remains for older callers; at least one identity must be present.
     """
 
-    from_ref: str | None = Field(
-        default=None, description="origin_id or service at hop start"
-    )
-    to_ref: str | None = Field(
-        default=None, description="origin_id or service at hop end"
-    )
+    from_ref: str | None = Field(default=None, description="origin_id or service at hop start")
+    to_ref: str | None = Field(default=None, description="origin_id or service at hop end")
     origin_id: str | None = Field(
         default=None, description="Primary origin_id for this hop when single-node"
     )
@@ -107,9 +103,7 @@ class ProcessHop(BaseModel):
     @model_validator(mode="after")
     def _require_identity(self) -> ProcessHop:
         if not any((self.from_ref, self.to_ref, self.origin_id, self.service)):
-            raise ValueError(
-                "ProcessHop needs from_ref, to_ref, origin_id, or service"
-            )
+            raise ValueError("ProcessHop needs from_ref, to_ref, origin_id, or service")
         return self
 
     def display_label(self) -> str:

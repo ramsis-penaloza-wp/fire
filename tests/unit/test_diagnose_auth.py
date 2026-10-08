@@ -5,9 +5,9 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
+import fire.apps.incident_engine.app as app_module
 from fire.apps.incident_engine.app import app
 from fire.apps.incident_engine.wiring import build_container
-import fire.apps.incident_engine.app as app_module
 
 
 @pytest.fixture

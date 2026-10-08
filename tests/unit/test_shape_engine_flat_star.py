@@ -10,10 +10,7 @@ from fire.core.ports.shape_generalizer import ShapeGeneralizer
 
 
 def _paths(shape) -> dict[str, tuple[str, object]]:
-    return {
-        field.path: (field.value_type.value, field.cardinality)
-        for field in shape.fields
-    }
+    return {field.path: (field.value_type.value, field.cardinality) for field in shape.fields}
 
 
 @pytest.fixture
@@ -161,5 +158,3 @@ def test_cardinality_null_void_digit_strings(engine: FlatStarShapeGeneralizer) -
     dumped = engine.generalize({"xs": [1, 2]}).model_dump()
     assert dumped["fields"][0]["cardinality"] == "2"
     assert isinstance(dumped["fields"][0]["cardinality"], str)
-
-

@@ -32,9 +32,7 @@ def test_diagnose_with_origin_and_shape_record(client: TestClient) -> None:
                 "endpoint_ref": "orders.create",
             },
             "shape": {
-                "fields": [
-                    {"path": "order.id", "value_type": "string", "cardinality": "1"}
-                ]
+                "fields": [{"path": "order.id", "value_type": "string", "cardinality": "1"}]
             },
             "fingerprint": {"schema_hash": "abc", "normalized_paths": ["order.id"]},
             "process_hops": [

@@ -37,9 +37,7 @@ def test_shape_record_associates_without_db_fields() -> None:
         project_id="proj-a",
         origin_id="orig-http-orders",
         shape=Shape(fields=[ShapeField(path="order.id", value_type=ValueType.STRING)]),
-        fingerprint=ShapeFingerprint(
-            schema_hash="abc", normalized_paths=["order.id"]
-        ),
+        fingerprint=ShapeFingerprint(schema_hash="abc", normalized_paths=["order.id"]),
     )
     dumped = record.model_dump()
     assert dumped["project_id"] == "proj-a"
@@ -85,13 +83,9 @@ async def test_echo_uses_ref_labels_without_new_prob_logic() -> None:
     dossier = Dossier(
         incident_id="inc-a",
         project_id="proj-a",
-        origin=Origin(
-            origin_id="orig-a", kind=OriginKind.HTTP, endpoint_ref="ep-a"
-        ),
+        origin=Origin(origin_id="orig-a", kind=OriginKind.HTTP, endpoint_ref="ep-a"),
         fingerprint=ShapeFingerprint(schema_hash="h1"),
-        process_path=ProcessPath(
-            hops=[ProcessHop(from_ref="orig-a", to_ref="orig-b")]
-        ),
+        process_path=ProcessPath(hops=[ProcessHop(from_ref="orig-a", to_ref="orig-b")]),
     )
     decision = await EchoReasoner().decide(dossier)
     assert decision.possibilities[0].label == "Failure near orig-a->orig-b"
