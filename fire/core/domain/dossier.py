@@ -146,4 +146,8 @@ class Dossier(BaseModel):
     fingerprint: ShapeFingerprint | None = None
     process_path: ProcessPath = Field(default_factory=ProcessPath)
     fragments: list[EvidenceFragment] = Field(default_factory=list)
-    missing: list[EvidenceFragment] = Field(default_factory=list)
+
+    @property
+    def missing(self) -> list[EvidenceFragment]:
+        """Fragments whose quality is MISSING, in `fragments` order."""
+        return [f for f in self.fragments if f.quality is EvidenceQuality.MISSING]

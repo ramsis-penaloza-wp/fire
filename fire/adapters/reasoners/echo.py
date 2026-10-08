@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from fire.core.domain.decision import Decision, Possibility
-from fire.core.domain.dossier import Dossier, EvidenceQuality
+from fire.core.domain.dossier import Dossier
 
 
 class EchoReasoner:
@@ -21,13 +21,14 @@ class EchoReasoner:
                     rationale_refs=[f"process_path:{label}"],
                 )
             )
-        if dossier.missing:
+        missing = dossier.missing
+        if missing:
             possibilities.append(
                 Possibility(
                     id="insufficient-evidence",
                     label="Insufficient evidence (MISSING fragments)",
                     probability=0.0,
-                    rationale_refs=[f.collector for f in dossier.missing],
+                    rationale_refs=[f.collector for f in missing],
                 )
             )
         if not possibilities:
@@ -44,9 +45,8 @@ class EchoReasoner:
         for possibility in possibilities:
             possibility.probability = round(1.0 / n, 4)
 
-        missing_heavy = any(f.quality is EvidenceQuality.MISSING for f in dossier.missing)
         has_structure = dossier.shape is not None or dossier.fingerprint is not None
-        confidence = 0.2 if missing_heavy or not has_structure else 0.45
+        confidence = 0.2 if missing or not has_structure else 0.45
         noul = confidence < 0.3 or not has_structure
 
         return Decision(

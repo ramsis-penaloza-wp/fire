@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 import fire.apps.incident_engine.app as app_module
 from fire.apps.incident_engine.app import app
 from fire.apps.incident_engine.wiring import build_container
-from fire.core.domain.dossier import Dossier
+from fire.core.domain.dossier import Dossier, EvidenceQuality
 from fire.core.domain.incident import Incident
 
 HEADERS = {"X-FIRE-Token": "test-fire-token"}
@@ -70,6 +70,20 @@ def test_diagnose_with_origin_shape_and_fingerprint(
     assert [field.path for field in dossier.shape.fields] == ["order.id"]
     assert dossier.fingerprint is not None
     assert dossier.fingerprint.schema_hash == "abc"
+
+
+@pytest.mark.unit
+def test_diagnose_declares_missing_evidence_as_fragments(
+    client: TestClient, dossiers: list[Dossier]
+) -> None:
+    response = client.post("/v0/diagnose", json={"project_id": "proj-a"}, headers=HEADERS)
+    assert response.status_code == 202
+    [dossier] = dossiers
+    assert [(f.collector, f.quality) for f in dossier.fragments] == [
+        ("origin", EvidenceQuality.MISSING),
+        ("shape", EvidenceQuality.MISSING),
+    ]
+    assert dossier.missing == dossier.fragments
 
 
 @pytest.mark.unit

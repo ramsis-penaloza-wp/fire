@@ -101,9 +101,9 @@ async def diagnose(
     shape = body.shape
     fingerprint = body.fingerprint
     origin = body.origin
-    missing: list[EvidenceFragment] = []
+    fragments: list[EvidenceFragment] = []
     if origin is None:
-        missing.append(
+        fragments.append(
             EvidenceFragment(
                 collector="origin",
                 quality=EvidenceQuality.MISSING,
@@ -111,7 +111,7 @@ async def diagnose(
             )
         )
     if shape is None and fingerprint is None:
-        missing.append(
+        fragments.append(
             EvidenceFragment(
                 collector="shape",
                 quality=EvidenceQuality.MISSING,
@@ -119,7 +119,7 @@ async def diagnose(
             )
         )
     elif fingerprint is None:
-        missing.append(
+        fragments.append(
             EvidenceFragment(
                 collector="fingerprint",
                 quality=EvidenceQuality.MISSING,
@@ -134,7 +134,7 @@ async def diagnose(
         shape=shape,
         fingerprint=fingerprint,
         process_path=ProcessPath(hops=list(body.process_hops)),
-        missing=missing,
+        fragments=fragments,
     )
     background_tasks.add_task(_run_pipeline, incident, dossier)
     return {
