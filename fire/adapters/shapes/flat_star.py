@@ -1,7 +1,7 @@
 """Flat-star ShapeGeneralizer: JSON → ShapeField paths with [*] / #variant.
 
-Locked model (Project Ops 2026-09-27): homogeneous arrays share one template under
-`path[*].…`; mixed arrays use `path[*]#k.…`. Never emit `path[0]`…`path[N]` index paths, values, or fingerprints.
+Homogeneous arrays share one template under `path[*].…`; mixed arrays use
+`path[*]#k.…`. Never emit `path[0]`…`path[N]` index paths, values, or fingerprints.
 Array cardinality is observed len as digit string ("2"); null | "void" | "n" aside.
 
 Leaf inference uses Pydantic TypeAdapter (UUID, EmailStr, AnyUrl, date, datetime,
@@ -188,13 +188,9 @@ class FlatStarShapeGeneralizer:
 
         leaf = _classify_leaf(value)
         cardinality: str | None = None if leaf is ValueType.NULL else "1"
-        fields.append(
-            ShapeField(path=path, value_type=leaf, cardinality=cardinality)
-        )
+        fields.append(ShapeField(path=path, value_type=leaf, cardinality=cardinality))
 
-    def _walk_array_elements(
-        self, items: list[Any], path: str, fields: list[ShapeField]
-    ) -> None:
+    def _walk_array_elements(self, items: list[Any], path: str, fields: list[ShapeField]) -> None:
         order: list[tuple[Any, ...]] = []
         representatives: dict[tuple[Any, ...], Any] = {}
         for item in items:

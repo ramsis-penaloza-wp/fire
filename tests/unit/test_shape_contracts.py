@@ -5,8 +5,8 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
-from fire.apps.incident_engine.app import DiagnoseRequest, app
 import fire.apps.incident_engine.app as app_module
+from fire.apps.incident_engine.app import DiagnoseRequest, app
 from fire.apps.incident_engine.wiring import build_container
 from fire.core.domain.dossier import Shape, ShapeField, ValueType
 from fire.core.domain.incident import Incident

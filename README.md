@@ -116,31 +116,41 @@ real collectors — still no Panoptes copy / no `omg.yml`.
 No copy of Panoptes source into this tree — ideas and layering only.
 No published accuracy claims; no “FIRE benchmark” numbers in docs until measured.
 
-## Development (planned)
+## Development
 
-Requires Python 3.13+, [uv](https://docs.astral.sh/uv/), Docker optional.
+Requires Python 3.13+ and [uv](https://docs.astral.sh/uv/).
 
 ```bash
-make dev/install        # uv sync
-make lint               # ruff
+make install            # uv sync --group dev
+make fmt                # ruff format
+make lint               # ruff format --check + ruff check
 make test               # pytest
-make docker/up          # local engine on :8000
+make run                # local engine on :8000
 ```
 
 ```bash
 uv run python -m fire.apps.incident_engine
 ```
 
-## HTTP API (planned)
+CI runs the same format check, lint, and tests on every pull request.
+
+## HTTP API
 
 Auth is **required by default** on mutating endpoints (`X-FIRE-Token` shared secret).
-Missing/invalid token → `401`. No fail-open “secret optional” mode outside an
-explicit local-dev override.
+Missing/invalid token → `401`; server token env var (`FIRE_API_TOKEN`) unset → `503`.
+No fail-open “secret optional” mode outside an explicit local-dev override.
+
+### Available today
+
+- `GET /health` — liveness (unauthenticated).
+- `POST /v0/diagnose` — submit an incident (`X-FIRE-Token` required); `202` with an
+  `incident_id`, diagnosis runs in the background.
+
+### Planned
 
 - `POST /webhooks/alerts` — generic alert webhook; 202 + background pipeline.
 - `POST /webhooks/alerts/{source}` — vendor webhook (normalize + route).
 - `POST /ingest/{system}` — continuous-plane tap (shape fingerprints only).
-- `GET /health` — liveness (unauthenticated).
 
 ## Hard boundaries
 

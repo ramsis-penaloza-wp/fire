@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import hmac
+
 import pytest
 from fastapi.testclient import TestClient
 
+import fire.apps.incident_engine.app as app_module
 from fire.apps.incident_engine.app import app
 from fire.apps.incident_engine.wiring import build_container
-import fire.apps.incident_engine.app as app_module
 
 
 @pytest.fixture
@@ -31,6 +33,37 @@ def test_diagnose_bad_token_401(client: TestClient) -> None:
         "/v0/diagnose",
         json={"project_id": "example"},
         headers={"X-FIRE-Token": "wrong"},
+    )
+    assert response.status_code == 401
+
+
+@pytest.mark.unit
+def test_diagnose_bad_token_compared_in_constant_time(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real_compare_digest = hmac.compare_digest
+    calls: list[tuple[object, object]] = []
+
+    def spy(a: bytes, b: bytes) -> bool:
+        calls.append((a, b))
+        return real_compare_digest(a, b)
+
+    monkeypatch.setattr(hmac, "compare_digest", spy)
+    response = client.post(
+        "/v0/diagnose",
+        json={"project_id": "example"},
+        headers={"X-FIRE-Token": "wrong"},
+    )
+    assert response.status_code == 401
+    assert len(calls) == 1
+
+
+@pytest.mark.unit
+def test_diagnose_non_ascii_token_401(client: TestClient) -> None:
+    response = client.post(
+        "/v0/diagnose",
+        json={"project_id": "example"},
+        headers={"X-FIRE-Token": "wrong-tökén".encode()},
     )
     assert response.status_code == 401
 

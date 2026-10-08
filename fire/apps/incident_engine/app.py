@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hmac
 import os
 import uuid
 from contextlib import asynccontextmanager
@@ -67,7 +68,9 @@ def _require_token(x_fire_token: str | None, token_env: str) -> None:
             status_code=503,
             detail=f"server misconfigured: {token_env} is not set",
         )
-    if not x_fire_token or x_fire_token != expected:
+    # Compare bytes: compare_digest raises TypeError on non-ASCII str inputs.
+    provided = (x_fire_token or "").encode()
+    if not hmac.compare_digest(provided, expected.encode()):
         raise HTTPException(status_code=401, detail="invalid or missing X-FIRE-Token")
 
 
@@ -121,7 +124,7 @@ async def diagnose(
             EvidenceFragment(
                 collector="origin",
                 quality=EvidenceQuality.MISSING,
-                summary="No Origin (caja) provided",
+                summary="No Origin provided",
             )
         )
     if shape is None and fingerprint is None:

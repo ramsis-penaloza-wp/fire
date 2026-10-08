@@ -18,8 +18,8 @@ class EvidenceQuality(StrEnum):
 class ValueType(StrEnum):
     """Formal leaf/structure types for ShapeField — never runtime values.
 
-    v0 set (Project Ops): structure + integer/number split + string refinements
-    inferred by form only. Media MIME (image/audio/video) is P1 — not here.
+    Covers structure, the integer/number split, and string refinements inferred
+    by form only. Media MIME types (image/audio/video) are not covered yet.
     """
 
     OBJECT = "object"
@@ -88,17 +88,13 @@ class ProcessHop(BaseModel):
     remains for older callers; at least one identity must be present.
     """
 
-    from_ref: str | None = Field(
-        default=None, description="origin_id or service at hop start"
-    )
-    to_ref: str | None = Field(
-        default=None, description="origin_id or service at hop end"
-    )
+    from_ref: str | None = Field(default=None, description="origin_id or service at hop start")
+    to_ref: str | None = Field(default=None, description="origin_id or service at hop end")
     origin_id: str | None = Field(
         default=None, description="Primary origin_id for this hop when single-node"
     )
     service: str | None = Field(
-        default=None, description="Legacy service label (compat with 7ca27b9)"
+        default=None, description="Legacy service label kept for older callers"
     )
     operation: str | None = None
     span_kind: str | None = None
@@ -107,9 +103,7 @@ class ProcessHop(BaseModel):
     @model_validator(mode="after")
     def _require_identity(self) -> ProcessHop:
         if not any((self.from_ref, self.to_ref, self.origin_id, self.service)):
-            raise ValueError(
-                "ProcessHop needs from_ref, to_ref, origin_id, or service"
-            )
+            raise ValueError("ProcessHop needs from_ref, to_ref, origin_id, or service")
         return self
 
     def display_label(self) -> str:

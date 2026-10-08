@@ -1,4 +1,4 @@
-"""Edge accepts Origin + ShapeRecord assembly on diagnose."""
+"""POST /v0/diagnose accepts an Origin and assembles a ShapeRecord."""
 
 from __future__ import annotations
 
@@ -32,9 +32,7 @@ def test_diagnose_with_origin_and_shape_record(client: TestClient) -> None:
                 "endpoint_ref": "orders.create",
             },
             "shape": {
-                "fields": [
-                    {"path": "order.id", "value_type": "string", "cardinality": "1"}
-                ]
+                "fields": [{"path": "order.id", "value_type": "string", "cardinality": "1"}]
             },
             "fingerprint": {"schema_hash": "abc", "normalized_paths": ["order.id"]},
             "process_hops": [

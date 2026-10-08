@@ -25,9 +25,7 @@ def test_process_env_wins_over_dotenv_file(
 
 
 @pytest.mark.unit
-def test_dotenv_file_used_when_env_unset(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_dotenv_file_used_when_env_unset(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     dotenv = tmp_path / ".env"
     dotenv.write_text("FIRE_API_TOKEN=from-file\n", encoding="utf-8")
     monkeypatch.delenv("FIRE_API_TOKEN", raising=False)

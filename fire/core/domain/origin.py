@@ -1,4 +1,4 @@
-"""Origin (caja): where an observation came from — not form."""
+"""Origin: where an observation came from — not its form."""
 
 from __future__ import annotations
 
@@ -19,6 +19,4 @@ class Origin(BaseModel):
 
     origin_id: str
     kind: OriginKind = OriginKind.OTHER
-    endpoint_ref: str = Field(
-        description="Stable endpoint id (not a URL that may carry secrets)."
-    )
+    endpoint_ref: str = Field(description="Stable endpoint id (not a URL that may carry secrets).")
