@@ -21,7 +21,6 @@ from fire.core.domain.dossier import (
     ProcessPath,
     Shape,
     ShapeFingerprint,
-    ShapeRecord,
 )
 from fire.core.domain.incident import Incident
 from fire.core.domain.origin import Origin
@@ -72,22 +71,6 @@ def _require_token(x_fire_token: str | None, token_env: str) -> None:
     provided = (x_fire_token or "").encode()
     if not hmac.compare_digest(provided, expected.encode()):
         raise HTTPException(status_code=401, detail="invalid or missing X-FIRE-Token")
-
-
-def _maybe_shape_record(
-    project_id: str,
-    origin: Origin | None,
-    shape: Shape | None,
-    fingerprint: ShapeFingerprint | None,
-) -> ShapeRecord | None:
-    if origin is None or shape is None or fingerprint is None:
-        return None
-    return ShapeRecord(
-        project_id=project_id,
-        origin_id=origin.origin_id,
-        shape=shape,
-        fingerprint=fingerprint,
-    )
 
 
 async def _run_pipeline(incident: Incident, dossier: Dossier) -> None:
@@ -150,7 +133,6 @@ async def diagnose(
         origin=origin,
         shape=shape,
         fingerprint=fingerprint,
-        shape_record=_maybe_shape_record(body.project_id, origin, shape, fingerprint),
         process_path=ProcessPath(hops=list(body.process_hops)),
         missing=missing,
     )

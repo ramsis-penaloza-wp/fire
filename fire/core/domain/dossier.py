@@ -5,7 +5,7 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Any
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from fire.core.domain.origin import Origin
 
@@ -136,13 +136,14 @@ class EvidenceFragment(BaseModel):
 
 
 class Dossier(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     incident_id: str
     project_id: str
     service: str | None = None
     origin: Origin | None = None
     shape: Shape | None = None
     fingerprint: ShapeFingerprint | None = None
-    shape_record: ShapeRecord | None = None
     process_path: ProcessPath = Field(default_factory=ProcessPath)
     fragments: list[EvidenceFragment] = Field(default_factory=list)
     missing: list[EvidenceFragment] = Field(default_factory=list)

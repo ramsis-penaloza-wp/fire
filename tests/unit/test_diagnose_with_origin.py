@@ -1,4 +1,4 @@
-"""POST /v0/diagnose accepts an Origin and assembles a ShapeRecord."""
+"""POST /v0/diagnose accepts an Origin and assembles the dossier."""
 
 from __future__ import annotations
 
@@ -36,7 +36,9 @@ def dossiers(monkeypatch: pytest.MonkeyPatch) -> list[Dossier]:
 
 
 @pytest.mark.unit
-def test_diagnose_with_origin_and_shape_record(client: TestClient) -> None:
+def test_diagnose_with_origin_shape_and_fingerprint(
+    client: TestClient, dossiers: list[Dossier]
+) -> None:
     response = client.post(
         "/v0/diagnose",
         json={
@@ -61,6 +63,13 @@ def test_diagnose_with_origin_and_shape_record(client: TestClient) -> None:
     body = response.json()
     assert body["origin_id"] == "orig-orders"
     assert body["project_id"] == "proj-a"
+    [dossier] = dossiers
+    assert dossier.origin is not None
+    assert dossier.origin.origin_id == "orig-orders"
+    assert dossier.shape is not None
+    assert [field.path for field in dossier.shape.fields] == ["order.id"]
+    assert dossier.fingerprint is not None
+    assert dossier.fingerprint.schema_hash == "abc"
 
 
 @pytest.mark.unit
