@@ -57,15 +57,61 @@ def test_process_hop_by_ref_no_embedded_shape() -> None:
 
 
 @pytest.mark.unit
-def test_process_hop_requires_identity() -> None:
-    with pytest.raises(ValidationError):
-        ProcessHop(operation="alone")
+def test_process_hop_identity_fields_are_ref_from_ref_to_ref() -> None:
+    assert set(ProcessHop.model_fields) == {
+        "ref",
+        "from_ref",
+        "to_ref",
+        "operation",
+        "span_kind",
+        "status",
+    }
 
 
 @pytest.mark.unit
-def test_process_hop_legacy_service_still_works() -> None:
-    hop = ProcessHop(service="api", operation="GET /y")
-    assert hop.display_label() == "api/GET /y"
+@pytest.mark.parametrize(
+    ("fields", "label"),
+    [
+        ({"ref": "api", "operation": "GET /y"}, "api/GET /y"),
+        ({"ref": "orig-a"}, "orig-a"),
+        ({"from_ref": "orig-a", "to_ref": "orig-b"}, "orig-a->orig-b"),
+        ({"from_ref": "orig-a", "operation": "POST /x"}, "orig-a/POST /x"),
+        ({"to_ref": "orig-b"}, "orig-b"),
+    ],
+    ids=["node-with-operation", "node", "edge", "edge-from-only", "edge-to-only"],
+)
+def test_process_hop_display_label(fields: dict[str, str], label: str) -> None:
+    assert ProcessHop(**fields).display_label() == label
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"operation": "alone"},
+        {"ref": "", "operation": "empty node"},
+        {"from_ref": "", "to_ref": ""},
+    ],
+    ids=["no-ref", "empty-ref", "empty-edge-refs"],
+)
+def test_process_hop_requires_a_ref(fields: dict[str, str]) -> None:
+    with pytest.raises(ValidationError):
+        ProcessHop(**fields)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"ref": "api", "from_ref": "orig-a"},
+        {"ref": "api", "to_ref": "orig-b"},
+        {"ref": "api", "from_ref": "orig-a", "to_ref": "orig-b"},
+    ],
+    ids=["ref-and-from", "ref-and-to", "ref-and-edge"],
+)
+def test_process_hop_cannot_be_node_and_edge(fields: dict[str, str]) -> None:
+    with pytest.raises(ValidationError, match="node"):
+        ProcessHop(**fields)
 
 
 @pytest.mark.unit

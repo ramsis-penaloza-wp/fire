@@ -2,7 +2,20 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+import math
+from enum import StrEnum
+
+from pydantic import BaseModel, Field, model_validator
+
+PROBABILITY_SUM_TOLERANCE = 1e-6
+
+
+class Primitive(StrEnum):
+    """System One primitive a reasoner used to reach the decision."""
+
+    CHOICE = "choice"
+    SCORE = "score"
+    NOUL = "noul"
 
 
 class Possibility(BaseModel):
@@ -27,7 +40,16 @@ class Decision(BaseModel):
         default=False,
         description="Privacy/insufficient-evidence gate: do not narrate as settled cause.",
     )
-    primitive: str = Field(
-        default="choice",
-        description="System One primitive used: choice | score | noul.",
+    primitive: Primitive = Field(
+        default=Primitive.CHOICE,
+        description="System One primitive used.",
     )
+
+    @model_validator(mode="after")
+    def _possibilities_form_a_distribution(self) -> Decision:
+        if not self.possibilities:
+            return self
+        total = math.fsum(p.probability for p in self.possibilities)
+        if not math.isclose(total, 1.0, abs_tol=PROBABILITY_SUM_TOLERANCE):
+            raise ValueError(f"possibility probabilities must sum to 1, got {total}")
+        return self

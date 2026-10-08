@@ -26,7 +26,7 @@ async def test_pipeline_runs(capsys: pytest.CaptureFixture[str]) -> None:
         project_id="example",
         service="api",
         fingerprint=ShapeFingerprint(schema_hash="xyz"),
-        process_path=ProcessPath(hops=[ProcessHop(service="api")]),
+        process_path=ProcessPath(hops=[ProcessHop(ref="api")]),
     )
     decision, narration = await service.run(incident, dossier)
     assert decision.incident_id == "inc-2"

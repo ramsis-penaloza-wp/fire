@@ -90,7 +90,7 @@ def test_diagnose_ok_202(client: TestClient) -> None:
             "project_id": "example",
             "service": "api",
             "fingerprint": {"schema_hash": "abc"},
-            "process_hops": [{"service": "api", "operation": "POST /x"}],
+            "process_hops": [{"ref": "api", "operation": "POST /x"}],
         },
         headers={"X-FIRE-Token": "test-fire-token"},
     )
