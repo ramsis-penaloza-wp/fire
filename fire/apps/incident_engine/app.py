@@ -124,7 +124,7 @@ async def diagnose(
             EvidenceFragment(
                 collector="origin",
                 quality=EvidenceQuality.MISSING,
-                summary="No Origin (caja) provided",
+                summary="No Origin provided",
             )
         )
     if shape is None and fingerprint is None:

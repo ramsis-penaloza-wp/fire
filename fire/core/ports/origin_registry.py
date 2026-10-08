@@ -1,4 +1,4 @@
-"""Port: look up Origin (caja) by id — adapter owns storage."""
+"""Port: look up an Origin by id — adapter owns storage."""
 
 from __future__ import annotations
 

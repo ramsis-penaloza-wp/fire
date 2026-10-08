@@ -1,4 +1,4 @@
-"""Origin (caja): where an observation came from — not form."""
+"""Origin: where an observation came from — not its form."""
 
 from __future__ import annotations
 

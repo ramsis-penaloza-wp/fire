@@ -1,8 +1,7 @@
 """Flat-star ShapeGeneralizer: JSON → ShapeField paths with [*] / #variant.
 
-Locked model (Project Ops 2026-09-27): homogeneous arrays share one template under
-`path[*].…`; mixed arrays use `path[*]#k.…`. Never emit `path[0]`…`path[N]` index
-paths, values, or fingerprints.
+Homogeneous arrays share one template under `path[*].…`; mixed arrays use
+`path[*]#k.…`. Never emit `path[0]`…`path[N]` index paths, values, or fingerprints.
 Array cardinality is observed len as digit string ("2"); null | "void" | "n" aside.
 
 Leaf inference uses Pydantic TypeAdapter (UUID, EmailStr, AnyUrl, date, datetime,
