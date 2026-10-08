@@ -18,8 +18,10 @@ class EvidenceQuality(StrEnum):
 class ValueType(StrEnum):
     """Formal leaf/structure types for ShapeField — never runtime values.
 
-    Covers structure, the integer/number split, and string refinements inferred
-    by form only. Media MIME types (image/audio/video) are not covered yet.
+    Covers structure, the integer/number split, and string refinements recognized by one
+    exact form each: canonical hyphenated uuid, plain email address, `scheme://` URI,
+    ISO 8601 `YYYY-MM-DD` date, and RFC 3339-style datetime. Every other string is
+    `string`; nothing is guessed from content (no binary or media detection).
     """
 
     OBJECT = "object"
@@ -34,7 +36,6 @@ class ValueType(StrEnum):
     UUID = "uuid"
     URI = "uri"
     EMAIL = "email"
-    BINARY = "binary"  # stdlib base64 decode (validate=True); not MIME media
     UNKNOWN = "unknown"
 
 

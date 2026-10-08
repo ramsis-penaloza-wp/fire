@@ -13,6 +13,11 @@ def _paths(shape) -> dict[str, tuple[str, object]]:
     return {field.path: (field.value_type.value, field.cardinality) for field in shape.fields}
 
 
+def _leaf_type(engine: FlatStarShapeGeneralizer, value: object) -> str:
+    [field] = engine.generalize({"x": value}).fields
+    return field.value_type.value
+
+
 @pytest.fixture
 def engine() -> FlatStarShapeGeneralizer:
     return FlatStarShapeGeneralizer()
@@ -114,38 +119,133 @@ def test_integer_vs_number(engine: FlatStarShapeGeneralizer) -> None:
 
 
 @pytest.mark.unit
-def test_refined_string_types(engine: FlatStarShapeGeneralizer) -> None:
-    paths = _paths(
-        engine.generalize(
-            {
-                "id": "550e8400-e29b-41d4-a716-446655440000",
-                "mail": "user@example.com",
-                "link": "https://example.com/x",
-                "when": "2024-01-15T12:00:00Z",
-                "day": "2024-01-15",
-                "blob": "SGVsbG8gV29ybGQhISE=",
-                "plain": "hello",
-            }
-        )
-    )
-    assert paths["id"] == ("uuid", "1")
-    assert paths["mail"] == ("email", "1")
-    assert paths["link"] == ("uri", "1")
-    assert paths["when"] == ("datetime", "1")
-    assert paths["day"] == ("date", "1")
-    assert paths["blob"] == ("binary", "1")
-    assert paths["plain"] == ("string", "1")
+def test_leaf_types(engine: FlatStarShapeGeneralizer) -> None:
+    assert _leaf_type(engine, None) == "null"
+    assert _leaf_type(engine, True) == "boolean"
+    assert _leaf_type(engine, 0) == "integer"
+    assert _leaf_type(engine, 10**30) == "integer"
+    assert _leaf_type(engine, 1.0) == "number"
+    assert _leaf_type(engine, "hello") == "string"
+    assert _leaf_type(engine, {1, 2}) == "unknown"
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("550e8400-e29b-41d4-a716-446655440000", "uuid"),
+        ("550E8400-E29B-41D4-A716-446655440000", "uuid"),
+        ("user@example.com", "email"),
+        ("User.Name+tag@Example.COM", "email"),
+        ("https://example.com/x", "uri"),
+        ("http://localhost:8080/health", "uri"),
+        ("file:///etc/hosts", "uri"),
+        ("2024-01-15", "date"),
+        ("0999-12-31", "date"),
+        ("2024-01-15T12:00", "datetime"),
+        ("2024-01-15 12:00", "datetime"),
+        ("2024-01-15T12:00:00", "datetime"),
+        ("2024-01-15T12:00:00Z", "datetime"),
+        ("2024-01-15T12:00Z", "datetime"),
+        ("2024-01-15T12:00:00.5", "datetime"),
+        ("2024-01-15T12:00:00.123456789Z", "datetime"),
+        ("2024-01-15T12:00:00+05:30", "datetime"),
+        ("2024-01-15 12:00-08:00", "datetime"),
+    ],
+)
+def test_strict_string_forms(engine: FlatStarShapeGeneralizer, value: str, expected: str) -> None:
+    assert _leaf_type(engine, value) == expected
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "value",
+    [
+        # numbers and words that lax parsers read as dates or datetimes
+        "12345",
+        "1700000000",
+        "2024",
+        "1.5",
+        "0",
+        # SKUs and hex whose length is a multiple of 4
+        "WP1234567890ABCD",
+        "deadbeefdeadbeef",
+        "WP1234567890ABC",
+        # scheme-like text without "://"
+        "orders:create",
+        "localhost:8080",
+        "foo:bar",
+        "mailto:a@b.com",
+        "urn:isbn:0451450523",
+        # URLs with whitespace or text around them
+        " https://example.com",
+        "https://example.com/a b",
+        "see https://example.com",
+        # non-canonical uuids
+        "550e8400e29b41d4a716446655440000",
+        "{550e8400-e29b-41d4-a716-446655440000}",
+        "urn:uuid:550e8400-e29b-41d4-a716-446655440000",
+        "+50e8400-e29b-41d4-a716-446655440000",
+        "5_0e8400-e29b-41d4-a716-446655440000",
+        "550e8400-e29b41d4-a716-4466554400-00",
+        # email with a display name, brackets, or padding
+        "Name <addr@x.com>",
+        "<addr@x.com>",
+        " user@example.com",
+        "user@example.com ",
+        # dates outside the extended YYYY-MM-DD form
+        "20240115",
+        "2024-W03-1",
+        "2024-015",
+        "2024-1-15",
+        "2024-02-30",
+        # datetimes outside the extended form
+        "20240115T120000",
+        "2024-01-15T12",
+        "2024-01-15T1200",
+        "2024-01-15x12:00",
+        "2024-01-15t12:00",
+        "2024-01-15T12:00z",
+        "2024-01-15T12:00:00,5",
+        "2024-01-15T12:00.5",
+        "2024-01-15T12:00:00+0530",
+        "2024-01-15T12:00:00+05",
+        "2024-01-15T12:00:00+05:30:00",
+        "2024-01-15T12:00:00.5+0530",
+        "2024-01-15T23:59:60",
+        "",
+    ],
+)
+def test_lookalike_strings_are_strings(engine: FlatStarShapeGeneralizer, value: str) -> None:
+    assert _leaf_type(engine, value) == "string"
+
+
+@pytest.mark.unit
+def test_numeric_ids_and_skus_are_strings_at_every_length(
+    engine: FlatStarShapeGeneralizer,
+) -> None:
+    digits = "1234567890" * 4
+    sku = "WP1234567890ABCDEFGHJKLMNPQRSTUV"
+    samples = [digits[:length] for length in range(1, 41)] + [
+        sku[:length] for length in range(1, len(sku) + 1)
+    ]
+    shapes = [engine.generalize({"id": value}) for value in samples]
+    assert all(shape == shapes[0] for shape in shapes)
+    assert _paths(shapes[0]) == {"id": ("string", "1")}
+
+
+@pytest.mark.unit
+def test_base64_text_is_a_string(engine: FlatStarShapeGeneralizer) -> None:
+    assert _leaf_type(engine, "SGVsbG8gV29ybGQhISE=") == "string"
+    assert _leaf_type(engine, "not!!valid!!base64!!") == "string"
 
 
 @pytest.mark.unit
 def test_value_type_is_formal_enum() -> None:
+    values = {member.value for member in ValueType}
     assert ValueType.INTEGER.value == "integer"
-    assert "image" not in {m.value for m in ValueType}
-
-
-@pytest.mark.unit
-def test_binary_rejects_invalid_base64(engine: FlatStarShapeGeneralizer) -> None:
-    assert _paths(engine.generalize({"x": "not!!valid!!base64!!"}))["x"] == ("string", "1")
+    assert "image" not in values
+    assert "binary" not in values
 
 
 @pytest.mark.unit
