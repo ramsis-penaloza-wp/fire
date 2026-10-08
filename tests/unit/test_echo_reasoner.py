@@ -25,7 +25,7 @@ async def test_echo_with_shape_and_fingerprint() -> None:
         service="checkout",
         shape=Shape(fields=[ShapeField(path="order.id", value_type=ValueType.STRING)]),
         fingerprint=ShapeFingerprint(schema_hash="abc", normalized_paths=["order.id"]),
-        process_path=ProcessPath(hops=[ProcessHop(service="api", operation="POST /orders")]),
+        process_path=ProcessPath(hops=[ProcessHop(ref="api", operation="POST /orders")]),
     )
     decision = await EchoReasoner().decide(dossier)
     assert decision.noul is False
