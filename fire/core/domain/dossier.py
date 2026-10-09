@@ -5,7 +5,7 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Any
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from fire.core.domain.origin import Origin
 
@@ -84,40 +84,38 @@ class ShapeRecord(BaseModel):
 class ProcessHop(BaseModel):
     """One hop on the path by reference — shape-safe; never embeds Shape.
 
-    Prefer `from_ref` / `to_ref` (origin_id or service name). Legacy `service`
-    remains for older callers; at least one identity must be present.
+    A hop is either a node (`ref`) or an edge (`from_ref` and/or `to_ref`). Every ref
+    is an origin_id or a service name.
     """
 
-    from_ref: str | None = Field(default=None, description="origin_id or service at hop start")
-    to_ref: str | None = Field(default=None, description="origin_id or service at hop end")
-    origin_id: str | None = Field(
-        default=None, description="Primary origin_id for this hop when single-node"
+    ref: str | None = Field(default=None, min_length=1, description="Node: origin_id or service")
+    from_ref: str | None = Field(
+        default=None, min_length=1, description="Edge start: origin_id or service"
     )
-    service: str | None = Field(
-        default=None, description="Legacy service label kept for older callers"
+    to_ref: str | None = Field(
+        default=None, min_length=1, description="Edge end: origin_id or service"
     )
     operation: str | None = None
     span_kind: str | None = None
     status: str | None = None
 
     @model_validator(mode="after")
-    def _require_identity(self) -> ProcessHop:
-        if not any((self.from_ref, self.to_ref, self.origin_id, self.service)):
-            raise ValueError("ProcessHop needs from_ref, to_ref, origin_id, or service")
+    def _require_one_identity_form(self) -> ProcessHop:
+        is_edge = self.from_ref is not None or self.to_ref is not None
+        if self.ref is not None and is_edge:
+            raise ValueError("ProcessHop is either a node (ref) or an edge (from_ref/to_ref)")
+        if self.ref is None and not is_edge:
+            raise ValueError("ProcessHop needs ref, from_ref, or to_ref")
         return self
 
     def display_label(self) -> str:
         """Human-readable hop label without inventing probabilities."""
-        if self.from_ref and self.to_ref:
+        if self.ref is not None:
+            base = self.ref
+        elif self.from_ref is not None and self.to_ref is not None:
             base = f"{self.from_ref}->{self.to_ref}"
-        elif self.origin_id:
-            base = self.origin_id
-        elif self.service:
-            base = self.service
-        elif self.to_ref:
-            base = self.to_ref
         else:
-            base = self.from_ref or "unknown"
+            base = self.from_ref or self.to_ref
         if self.operation:
             return f"{base}/{self.operation}"
         return base
@@ -138,13 +136,18 @@ class EvidenceFragment(BaseModel):
 
 
 class Dossier(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     incident_id: str
     project_id: str
     service: str | None = None
     origin: Origin | None = None
     shape: Shape | None = None
     fingerprint: ShapeFingerprint | None = None
-    shape_record: ShapeRecord | None = None
     process_path: ProcessPath = Field(default_factory=ProcessPath)
     fragments: list[EvidenceFragment] = Field(default_factory=list)
-    missing: list[EvidenceFragment] = Field(default_factory=list)
+
+    @property
+    def missing(self) -> list[EvidenceFragment]:
+        """Fragments whose quality is MISSING, in `fragments` order."""
+        return [f for f in self.fragments if f.quality is EvidenceQuality.MISSING]

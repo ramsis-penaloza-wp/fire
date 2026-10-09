@@ -21,7 +21,6 @@ from fire.core.domain.dossier import (
     ProcessPath,
     Shape,
     ShapeFingerprint,
-    ShapeRecord,
 )
 from fire.core.domain.incident import Incident
 from fire.core.domain.origin import Origin
@@ -74,22 +73,6 @@ def _require_token(x_fire_token: str | None, token_env: str) -> None:
         raise HTTPException(status_code=401, detail="invalid or missing X-FIRE-Token")
 
 
-def _maybe_shape_record(
-    project_id: str,
-    origin: Origin | None,
-    shape: Shape | None,
-    fingerprint: ShapeFingerprint | None,
-) -> ShapeRecord | None:
-    if origin is None or shape is None or fingerprint is None:
-        return None
-    return ShapeRecord(
-        project_id=project_id,
-        origin_id=origin.origin_id,
-        shape=shape,
-        fingerprint=fingerprint,
-    )
-
-
 async def _run_pipeline(incident: Incident, dossier: Dossier) -> None:
     await get_container().diagnosis.run(incident, dossier)
 
@@ -118,9 +101,9 @@ async def diagnose(
     shape = body.shape
     fingerprint = body.fingerprint
     origin = body.origin
-    missing: list[EvidenceFragment] = []
+    fragments: list[EvidenceFragment] = []
     if origin is None:
-        missing.append(
+        fragments.append(
             EvidenceFragment(
                 collector="origin",
                 quality=EvidenceQuality.MISSING,
@@ -128,7 +111,7 @@ async def diagnose(
             )
         )
     if shape is None and fingerprint is None:
-        missing.append(
+        fragments.append(
             EvidenceFragment(
                 collector="shape",
                 quality=EvidenceQuality.MISSING,
@@ -136,11 +119,11 @@ async def diagnose(
             )
         )
     elif fingerprint is None:
-        missing.append(
+        fragments.append(
             EvidenceFragment(
                 collector="fingerprint",
                 quality=EvidenceQuality.MISSING,
-                summary="Shape present without stable fingerprint (generalizer is a future port)",
+                summary="Shape present without a fingerprint",
             )
         )
     dossier = Dossier(
@@ -150,9 +133,8 @@ async def diagnose(
         origin=origin,
         shape=shape,
         fingerprint=fingerprint,
-        shape_record=_maybe_shape_record(body.project_id, origin, shape, fingerprint),
         process_path=ProcessPath(hops=list(body.process_hops)),
-        missing=missing,
+        fragments=fragments,
     )
     background_tasks.add_task(_run_pipeline, incident, dossier)
     return {
