@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Any
+from typing import Annotated, Any
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -18,8 +18,10 @@ class EvidenceQuality(StrEnum):
 class ValueType(StrEnum):
     """Formal leaf/structure types for ShapeField — never runtime values.
 
-    Covers structure, the integer/number split, and string refinements inferred
-    by form only. Media MIME types (image/audio/video) are not covered yet.
+    Covers structure, the integer/number split, and string refinements recognized by one
+    exact form each: canonical hyphenated uuid, plain email address, `scheme://` URI,
+    ISO 8601 `YYYY-MM-DD` date, and RFC 3339-style datetime. Every other string is
+    `string`; nothing is guessed from content (no binary or media detection).
     """
 
     OBJECT = "object"
@@ -34,31 +36,36 @@ class ValueType(StrEnum):
     UUID = "uuid"
     URI = "uri"
     EMAIL = "email"
-    BINARY = "binary"  # stdlib base64 decode (validate=True); not MIME media
     UNKNOWN = "unknown"
 
 
-# Shape cardinality: null | "void" | digit string "0"…"N" | "n" (unbounded).
-# Never a JSON int. No legacy one/many/optional labels.
-CardinalityValue = str | None  # null | "void" | "0"…"N" | "n"
+CardinalityValue = Annotated[str, Field(pattern=r"^(void|n|0|[1-9][0-9]*)$")] | None
 
 
 class ShapeField(BaseModel):
-    """One structural field: path + type + cardinality. Never a value.
+    """One structural field: path + type + cardinality + optional. Never a value.
 
-    cardinality is null | "void" | "0"…"N" | "n" (unbounded). Arrays use
-    observed len as a digit string (e.g. len 2 → "2"). Never a typed int.
+    cardinality is null, "void", "n" (any number), or a non-negative integer as a digit
+    string without leading zeros ("0", "1", "42"); never a JSON number. The generalizer
+    emits null for null, "void" for an object that is always empty and "1" otherwise, "0"
+    for an array that is always empty and "n" otherwise, and "1" for every other leaf.
+
+    optional is true when the key may be absent: some object at the parent path lacks it.
+    It is relative to that parent, so a field under an optional key is optional only when
+    some object at its own parent path lacks it.
     """
 
     path: str
     value_type: ValueType = ValueType.UNKNOWN
     cardinality: CardinalityValue = "1"
+    optional: bool = False
 
 
 class Shape(BaseModel):
-    """Reusable structure description — keys/types/cardinality only.
+    """Reusable structure description — keys, types, cardinality, and optionality only.
 
-    Produced by ShapeGeneralizer (flat paths with [*] / #variant). Not a fingerprint.
+    Produced by ShapeGeneralizer: flat paths with [*] for array elements, one field per
+    (path, value_type), sorted by that pair. Not a fingerprint.
     """
 
     fields: list[ShapeField] = Field(default_factory=list)

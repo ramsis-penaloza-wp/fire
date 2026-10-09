@@ -19,7 +19,7 @@ def test_shape_has_no_value_slot() -> None:
     shape = Shape(fields=[field])
     assert shape.model_dump() == {
         "fields": [
-            {"path": "a.b", "value_type": "number", "cardinality": "1"},
+            {"path": "a.b", "value_type": "number", "cardinality": "1", "optional": False},
         ]
     }
 

@@ -1,23 +1,26 @@
-"""Flat-star ShapeGeneralizer: JSON → ShapeField paths with [*] / #variant.
+"""Flat-star ShapeGeneralizer: JSON → flat ShapeField paths, with `[*]` for array elements.
 
-Homogeneous arrays share one template under `path[*].…`; mixed arrays use
-`path[*]#k.…`. Never emit `path[0]`…`path[N]` index paths, values, or fingerprints.
-Array cardinality is observed len as digit string ("2"); null | "void" | "n" aside.
+Every value seen at a path is a sample of it. All elements of all arrays at `p` are samples
+of `p[*]`, and the object samples at a path merge into one template whose keys are the union
+of theirs; a key that some object sample lacks is optional. A path carries one field per
+distinct value type. Array cardinality is "0" when every sample is empty and "n" otherwise,
+never a length; object cardinality is "void" when every sample is empty and "1" otherwise.
+The result holds no index paths, values, or fingerprints, and does not depend on element or
+key order.
 
-Leaf inference uses Pydantic TypeAdapter (UUID, EmailStr, AnyUrl, date, datetime,
-StrictInt) plus stdlib base64.b64decode(validate=True) for binary — no homemade
-regex classifiers.
+A string gets a refined type only in one exact form: a structural check (length, separator
+positions) followed by a stdlib or Pydantic parser. Any other string is `string`, so a field
+keeps its type whatever its value. Contract: docs/specs/shape-generalizer.md.
 """
 
 from __future__ import annotations
 
-import base64
-import re
+from collections.abc import Callable
 from datetime import date, datetime
 from typing import Any
 from uuid import UUID
 
-from pydantic import AnyUrl, EmailStr, StrictInt, TypeAdapter, ValidationError
+from pydantic import AnyUrl, EmailStr, TypeAdapter
 
 from fire.core.domain.dossier import (
     Shape,
@@ -25,50 +28,93 @@ from fire.core.domain.dossier import (
     ValueType,
 )
 
-_UUID = TypeAdapter(UUID)
 _EMAIL = TypeAdapter(EmailStr)
 _URL = TypeAdapter(AnyUrl)
-_DATE = TypeAdapter(date)
-_DATETIME = TypeAdapter(datetime)
-_STRICT_INT = TypeAdapter(StrictInt)
-
-_MIN_BINARY_LEN = 16
 
 
-def _try_adapter(adapter: TypeAdapter[Any], value: str) -> bool:
+def _parses(parse: Callable[[str], object], value: str) -> bool:
     try:
-        adapter.validate_python(value)
-        return True
-    except ValidationError:
+        parse(value)
+    except ValueError:
         return False
+    return True
 
 
-def _is_binary(value: str) -> bool:
-    """Slim standard check: stdlib base64 decode with validate=True."""
-    if len(value) < _MIN_BINARY_LEN or len(value) % 4 != 0:
-        return False
+def _has_whitespace(value: str) -> bool:
+    return any(char.isspace() for char in value)
+
+
+def _is_uuid(value: str) -> bool:
+    """Canonical 8-4-4-4-12 hex in either case.
+
+    `UUID` alone also takes braces, `urn:uuid:`, bare hex, misplaced hyphens, and `+` or `_`.
+    """
     try:
-        base64.b64decode(value, validate=True)
-        return True
-    except (ValueError, TypeError):
+        return str(UUID(value)) == value.lower()
+    except ValueError:
         return False
+
+
+def _is_email(value: str) -> bool:
+    """A plain address. `EmailStr` alone also takes `Name <addr>` and strips padding."""
+    if "<" in value or _has_whitespace(value):
+        return False
+    return _parses(_EMAIL.validate_python, value)
+
+
+def _is_uri(value: str) -> bool:
+    """`scheme://…`. `AnyUrl` alone also takes `scheme:path` and drops or encodes whitespace."""
+    if "://" not in value or _has_whitespace(value):
+        return False
+    return _parses(_URL.validate_python, value)
+
+
+def _is_date(value: str) -> bool:
+    """`YYYY-MM-DD`. `date.fromisoformat` alone also takes `YYYYMMDD` and week dates."""
+    return len(value) == 10 and value[4] == value[7] == "-" and _parses(date.fromisoformat, value)
+
+
+def _is_datetime(value: str) -> bool:
+    """`YYYY-MM-DD`, `T` or a space, a clock, then an optional `Z`, `+HH:MM`, or `-HH:MM`.
+
+    `datetime.fromisoformat` alone also takes any separator, hour-only and basic (`HHMMSS`,
+    `+HHMM`) forms, and comma fractions.
+    """
+    if len(value) < 16 or value[10] not in "T " or not _is_date(value[:10]):
+        return False
+    return _is_clock(_without_offset(value[11:])) and _parses(datetime.fromisoformat, value)
+
+
+def _without_offset(time: str) -> str:
+    if time.endswith("Z"):
+        return time[:-1]
+    if len(time) > 6 and time[-6] in "+-" and time[-3] == ":":
+        return time[:-6]
+    return time
+
+
+def _is_clock(clock: str) -> bool:
+    """`HH:MM`, `HH:MM:SS`, or `HH:MM:SS.` plus digits; the parser checks the ranges."""
+    if len(clock) < 5 or clock[2] != ":":
+        return False
+    if len(clock) == 5:
+        return True
+    if len(clock) < 8 or clock[5] != ":":
+        return False
+    return len(clock) == 8 or (clock[8] == "." and clock[9:].isdigit())
 
 
 def _classify_string(value: str) -> ValueType:
-    """Form-only string refinements via Pydantic / stdlib; never store the value."""
-    if _try_adapter(_UUID, value):
+    if _is_uuid(value):
         return ValueType.UUID
-    if _try_adapter(_EMAIL, value):
+    if _is_email(value):
         return ValueType.EMAIL
-    if _try_adapter(_URL, value):
+    if _is_uri(value):
         return ValueType.URI
-    # date before datetime: Pydantic accepts YYYY-MM-DD as datetime midnight
-    if _try_adapter(_DATE, value):
+    if _is_date(value):
         return ValueType.DATE
-    if _try_adapter(_DATETIME, value):
+    if _is_datetime(value):
         return ValueType.DATETIME
-    if _is_binary(value):
-        return ValueType.BINARY
     return ValueType.STRING
 
 
@@ -77,49 +123,13 @@ def _classify_leaf(value: Any) -> ValueType:
         return ValueType.NULL
     if isinstance(value, bool):
         return ValueType.BOOLEAN
-    if isinstance(value, int) and not isinstance(value, bool):
-        # Prefer StrictInt semantics (bool already excluded).
-        try:
-            _STRICT_INT.validate_python(value)
-            return ValueType.INTEGER
-        except ValidationError:
-            return ValueType.NUMBER
+    if isinstance(value, int):
+        return ValueType.INTEGER
     if isinstance(value, float):
         return ValueType.NUMBER
     if isinstance(value, str):
         return _classify_string(value)
     return ValueType.UNKNOWN
-
-
-def _structural_signature(value: Any) -> tuple[Any, ...]:
-    """Canonical structural id for equality (keys sorted; no values).
-
-    Arrays are length-agnostic: homogeneous → ("array", element_sig);
-    mixed → ("array", ("mixed", unique_element_sigs…)). Never encode length.
-    Leaf sig uses ValueType so integer ≠ number and uuid ≠ string.
-    """
-    if isinstance(value, dict):
-        return (
-            "object",
-            tuple(
-                (key, _structural_signature(child))
-                for key, child in sorted(value.items(), key=lambda kv: kv[0])
-            ),
-        )
-    if isinstance(value, list):
-        if not value:
-            return ("array", ("empty",))
-        unique: list[tuple[Any, ...]] = []
-        seen: set[tuple[Any, ...]] = set()
-        for item in value:
-            sig = _structural_signature(item)
-            if sig not in seen:
-                seen.add(sig)
-                unique.append(sig)
-        if len(unique) == 1:
-            return ("array", unique[0])
-        return ("array", ("mixed", tuple(unique)))
-    return (_classify_leaf(value).value,)
 
 
 def _child_path(prefix: str, key: str) -> str:
@@ -130,78 +140,72 @@ def _star_path(prefix: str) -> str:
     return f"{prefix}[*]" if prefix else "[*]"
 
 
-def _variant_path(prefix: str, index: int) -> str:
-    return f"{prefix}[*]#{index}" if prefix else f"[*]#{index}"
+type _Fields = dict[tuple[str, ValueType], ShapeField]
+
+_EMPTY_CARDINALITIES = frozenset({"void", "0"})
 
 
-def _is_array_element_slot(path: str) -> bool:
-    """True for paths ending in `[*]` or `[*]#k`."""
-    if not path:
-        return False
-    return bool(re.search(r"\[\*\](#\d+)?$", path))
+def _add(
+    fields: _Fields,
+    path: str,
+    value_type: ValueType,
+    *,
+    cardinality: str | None,
+    optional: bool,
+) -> None:
+    """Keep one field per (path, value_type).
+
+    Keys are not escaped, so a key holding `.` or `[*]` can land on a nested key's path. The
+    merged field is optional only if both are, and populated if either is.
+    """
+    earlier = fields.get((path, value_type))
+    if earlier is not None:
+        optional = optional and earlier.optional
+        if cardinality in _EMPTY_CARDINALITIES:
+            cardinality = earlier.cardinality
+    fields[path, value_type] = ShapeField(
+        path=path, value_type=value_type, cardinality=cardinality, optional=optional
+    )
+
+
+def _walk(samples: list[Any], path: str, optional: bool, fields: _Fields) -> None:
+    """Emit one field per value type among `samples`, every value seen at `path`."""
+    objects = [sample for sample in samples if isinstance(sample, dict)]
+    arrays = [sample for sample in samples if isinstance(sample, list)]
+    leaves = {_classify_leaf(sample) for sample in samples if not isinstance(sample, dict | list)}
+    for leaf in leaves:
+        cardinality = None if leaf is ValueType.NULL else "1"
+        _add(fields, path, leaf, cardinality=cardinality, optional=optional)
+    if objects:
+        _walk_objects(objects, path, optional, fields)
+    if arrays:
+        _walk_arrays(arrays, path, optional, fields)
+
+
+def _walk_objects(
+    objects: list[dict[str, Any]], path: str, optional: bool, fields: _Fields
+) -> None:
+    """The root object emits no field of its own; its keys start the paths."""
+    if path:
+        cardinality = "1" if any(objects) else "void"
+        _add(fields, path, ValueType.OBJECT, cardinality=cardinality, optional=optional)
+    for key in set().union(*objects):
+        present = [obj[key] for obj in objects if key in obj]
+        _walk(present, _child_path(path, key), len(present) < len(objects), fields)
+
+
+def _walk_arrays(arrays: list[list[Any]], path: str, optional: bool, fields: _Fields) -> None:
+    cardinality = "n" if any(arrays) else "0"
+    _add(fields, path, ValueType.ARRAY, cardinality=cardinality, optional=optional)
+    elements = [element for array in arrays for element in array]
+    if elements:
+        _walk(elements, _star_path(path), False, fields)
 
 
 class FlatStarShapeGeneralizer:
-    """Pure adapter: walk JSON, emit deduped flat Shape fields."""
+    """Pure adapter: merge every value seen at a path into flat, sorted Shape fields."""
 
     def generalize(self, payload: Any) -> Shape:
-        fields: list[ShapeField] = []
-        self._walk(payload, "", fields)
-        fields.sort(key=lambda field: field.path)
-        return Shape(fields=fields)
-
-    def _walk(self, value: Any, path: str, fields: list[ShapeField]) -> None:
-        if isinstance(value, dict):
-            if not value:
-                if path:
-                    fields.append(
-                        ShapeField(
-                            path=path,
-                            value_type=ValueType.OBJECT,
-                            cardinality="void",
-                        )
-                    )
-                return
-            if path and not _is_array_element_slot(path):
-                fields.append(
-                    ShapeField(
-                        path=path,
-                        value_type=ValueType.OBJECT,
-                        cardinality="1",
-                    )
-                )
-            for key, child in sorted(value.items(), key=lambda kv: kv[0]):
-                self._walk(child, _child_path(path, key), fields)
-            return
-        if isinstance(value, list):
-            fields.append(
-                ShapeField(
-                    path=path,
-                    value_type=ValueType.ARRAY,
-                    cardinality=str(len(value)),
-                )
-            )
-            if not value:
-                return
-            self._walk_array_elements(value, path, fields)
-            return
-
-        leaf = _classify_leaf(value)
-        cardinality: str | None = None if leaf is ValueType.NULL else "1"
-        fields.append(ShapeField(path=path, value_type=leaf, cardinality=cardinality))
-
-    def _walk_array_elements(self, items: list[Any], path: str, fields: list[ShapeField]) -> None:
-        order: list[tuple[Any, ...]] = []
-        representatives: dict[tuple[Any, ...], Any] = {}
-        for item in items:
-            sig = _structural_signature(item)
-            if sig not in representatives:
-                representatives[sig] = item
-                order.append(sig)
-
-        if len(order) == 1:
-            self._walk(representatives[order[0]], _star_path(path), fields)
-            return
-
-        for index, sig in enumerate(order):
-            self._walk(representatives[sig], _variant_path(path, index), fields)
+        fields: _Fields = {}
+        _walk([payload], "", False, fields)
+        return Shape(fields=[fields[key] for key in sorted(fields)])
