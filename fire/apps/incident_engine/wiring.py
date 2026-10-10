@@ -8,7 +8,9 @@ from pathlib import Path
 from fire.adapters.narrators.template import TemplateNarrator
 from fire.adapters.notifiers.console import ConsoleNotifier
 from fire.adapters.reasoners.echo import EchoReasoner
+from fire.adapters.shapes.sha256 import Sha256ShapeFingerprinter
 from fire.apps.config import FireConfig, load_fire_config
+from fire.core.ports.shape_fingerprinter import ShapeFingerprinter
 from fire.core.services.diagnosis import DiagnosisService
 
 DEFAULT_CONFIG = Path(__file__).resolve().parents[3] / "config" / "fire.yml"
@@ -18,6 +20,7 @@ DEFAULT_CONFIG = Path(__file__).resolve().parents[3] / "config" / "fire.yml"
 class Container:
     config: FireConfig
     diagnosis: DiagnosisService
+    fingerprinter: ShapeFingerprinter
 
 
 def build_container(config_path: Path | None = None) -> Container:
@@ -44,4 +47,4 @@ def build_container(config_path: Path | None = None) -> Container:
         narrator=TemplateNarrator(),
         notifier=ConsoleNotifier(),
     )
-    return Container(config=config, diagnosis=diagnosis)
+    return Container(config=config, diagnosis=diagnosis, fingerprinter=Sha256ShapeFingerprinter())

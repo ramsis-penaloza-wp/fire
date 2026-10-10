@@ -92,7 +92,10 @@ The incident engine declares these missing fragments:
 |-----------|------|---------|
 | `origin` | no `origin` | `No Origin provided` |
 | `shape` | neither `shape` nor `fingerprint` | `No shape or fingerprint provided` |
-| `fingerprint` | `shape` without `fingerprint` | `Shape present without a fingerprint` |
+
+When the request carries a `shape` without a `fingerprint`, the engine computes the
+fingerprint with the `ShapeFingerprinter` port (SHA-256 of the fields in canonical order), so
+no `fingerprint` fragment is declared. A fingerprint sent by the client is kept as is.
 
 ## Decision
 

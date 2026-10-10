@@ -100,6 +100,8 @@ async def diagnose(
     )
     shape = body.shape
     fingerprint = body.fingerprint
+    if shape is not None and fingerprint is None:
+        fingerprint = container.fingerprinter.fingerprint(shape)
     origin = body.origin
     fragments: list[EvidenceFragment] = []
     if origin is None:
@@ -116,14 +118,6 @@ async def diagnose(
                 collector="shape",
                 quality=EvidenceQuality.MISSING,
                 summary="No shape or fingerprint provided",
-            )
-        )
-    elif fingerprint is None:
-        fragments.append(
-            EvidenceFragment(
-                collector="fingerprint",
-                quality=EvidenceQuality.MISSING,
-                summary="Shape present without a fingerprint",
             )
         )
     dossier = Dossier(
