@@ -6,9 +6,10 @@ import pytest
 from fastapi.testclient import TestClient
 
 import fire.apps.incident_engine.app as app_module
+from fire.adapters.shapes.sha256 import Sha256ShapeFingerprinter
 from fire.apps.incident_engine.app import app
 from fire.apps.incident_engine.wiring import build_container
-from fire.core.domain.dossier import Dossier, EvidenceQuality
+from fire.core.domain.dossier import Dossier, EvidenceQuality, Shape
 from fire.core.domain.incident import Incident
 
 HEADERS = {"X-FIRE-Token": "test-fire-token"}
@@ -87,23 +88,25 @@ def test_diagnose_declares_missing_evidence_as_fragments(
 
 
 @pytest.mark.unit
-def test_diagnose_shape_without_fingerprint_declares_missing_fingerprint(
+def test_diagnose_shape_without_fingerprint_computes_it(
     client: TestClient, dossiers: list[Dossier]
 ) -> None:
+    shape = {"fields": [{"path": "order.id", "value_type": "string"}]}
     response = client.post(
         "/v0/diagnose",
         json={
             "project_id": "proj-a",
             "origin": {"origin_id": "orig-orders", "endpoint_ref": "orders.create"},
-            "shape": {"fields": [{"path": "order.id", "value_type": "string"}]},
+            "shape": shape,
         },
         headers=HEADERS,
     )
     assert response.status_code == 202
     [dossier] = dossiers
-    assert [(f.collector, f.summary) for f in dossier.missing] == [
-        ("fingerprint", "Shape present without a fingerprint"),
-    ]
+    assert dossier.fingerprint == Sha256ShapeFingerprinter().fingerprint(
+        Shape.model_validate(shape)
+    )
+    assert dossier.missing == []
 
 
 @pytest.mark.unit
