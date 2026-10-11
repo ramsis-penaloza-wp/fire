@@ -1,0 +1,34 @@
+{
+  "work_unit_id": "wu-manual-oracle-refund-initiated-001",
+  "source": "sqs",
+  "domain": "payments",
+  "event_type": "payments.oracle_refund_initiated",
+  "payload": {
+    "event_type": "customer_refund",
+    "rice_id": "AP-I-3006",
+    "request_id": "b3f2c1a0-9d4e-4c11-8a77-0f1e2d3c4b5a",
+    "published_at": "2026-07-13T21:05:00+00:00",
+    "business_unit": "WP_US",
+    "sales_order_number": "TH2VNK0000",
+    "transaction_number": "CT123456",
+    "transaction_type": "CHASUS-0257-Stripe",
+    "transaction_date": "2026-07-05T14:32:10+00:00",
+    "transaction_amount": "95.00",
+    "currency": "USD",
+    "refund_amount": "95.00",
+    "refund_number": "1559450",
+    "refund_date": "2026-07-06T09:15:00+00:00",
+    "sales_order_payment_id": "1780669801220451"
+  },
+  "metadata": {
+    "timestamp": "2026-05-15T09:00:00+00:00",
+    "correlation_id": "corr-manual-oracle-refund-initiated-001",
+    "priority": "normal",
+    "region": "us-east-1",
+    "routing": {
+      "business_event_type": "payments.oracle_refund_initiated",
+      "target_domains": ["payments"],
+      "triggered_by": "manual:test_payload"
+    }
+  }
+}

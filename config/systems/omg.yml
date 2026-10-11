@@ -17,15 +17,68 @@ discovery:
     kind: event_chains_graph
     path_env: OMG_MANIFEST_PATH
 
-# Where the tentacle reads from (not consumed yet).
+# Where the tentacle reads. Contract: docs/specs/tentacle.md#sources-in-the-system-yaml.
+# Only `replay` has a reader so far; the tentacle skips the others and says so.
 sources:
-  # kinesis-publisher runs in every region, so the same DomainEvent can appear in both
-  # streams. Its `id` is the work unit's work_unit_id.
+  # DomainEvents. kinesis-publisher runs in every region, so one `id` (the work unit's
+  # work_unit_id) arrives from both streams and counts once.
   - id: domain-events
     kind: kinesis
+    direction: internal
     stream_env: OMG_EVENTS_STREAM
     regions: [us-east-1, us-west-2]
-    dedupe_key: id
+    envelope: {event_id: id, event_type: eventType, occurred_at: occurredAt, work_id: id,
+               payload: payload}
+  # Every domain event, including the 39 that never reach Kinesis. SK is EVENT#<work_unit_id>.
+  - id: order-domain-events
+    kind: dynamodb_stream
+    direction: internal
+    table_env: OMG_EVENTS_TABLE
+    regions: [us-east-1, us-west-2]
+    envelope: {event_id: {path: SK, strip_prefix: "EVENT#"}, event_type: event_type,
+               occurred_at: created_at, work_id: {path: SK, strip_prefix: "EVENT#"},
+               payload: payload}
+  - id: rx-updates
+    kind: kinesis
+    direction: inbound
+    stream_env: OMG_RX_UPDATES_STREAM
+    regions: [us-east-1, us-west-2]     # to be confirmed
+    envelope: {event_id: eventId, event_type: eventName, occurred_at: {path: ts, epoch: ms},
+               payload: data}
+  - id: carrier-events
+    kind: sns_fanout
+    direction: inbound
+    topic_env: OMG_CARRIER_EVENTS_TOPIC
+    regions: [us-east-1, us-west-2]     # to be confirmed
+    envelope: {event_id: MessageId, event_type: Message.event_type,
+               occurred_at: Message.occurred_at, payload: Message}
+  - id: financials-events
+    kind: sns_fanout
+    direction: inbound
+    topic_env: OMG_FINANCIALS_EVENTS_TOPIC
+    regions: [us-east-1, us-west-2]     # to be confirmed
+    envelope: {event_id: MessageId, event_type: Message.event_type,
+               occurred_at: Message.published_at, payload: Message}
+  # Request and response pairs OMG's partner clients write to its transmission bucket.
+  - id: transmissions
+    kind: s3_capture
+    bucket_env: OMG_TRANSMISSION_BUCKET
+    captures:
+      - {prefix: narvar-payloads/, label: narvar, layout: work_unit_action}
+      - {prefix: insurance-payloads/, label: insurance, layout: work_unit_action}
+      - {prefix: monocle-payloads/, label: monocle, layout: work_unit_action}
+      - {prefix: notification-payloads/, label: notification, layout: work_unit_action}
+      - {prefix: oracle-payloads/, label: oracle-om, layout: work_unit_order_action}
+      - {prefix: springfield-payloads/, label: helios, layout: work_unit_order}
+      - {prefix: order-services-payloads/, label: order-services, layout: work_unit_order}
+  # OMG's WorkUnit samples, scripts/test_payloads/*_work_unit.json. Pointed at the whole
+  # directory, the other files there (API request bodies) count as missing_event_id.
+  - id: work-unit-samples
+    kind: replay
+    direction: internal
+    path_env: OMG_REPLAY_PATH
+    envelope: {event_id: work_unit_id, event_type: event_type,
+               occurred_at: metadata.timestamp, work_id: work_unit_id, payload: payload}
 
 # DLQ attribution joins abandoned work units to observations, so every event is fingerprinted.
 fingerprinting:

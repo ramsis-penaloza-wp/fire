@@ -244,7 +244,9 @@ drift signals. Both read endpoints require `X-FIRE-Token`.
 Step 1.1 made `Shape`, `ShapeField`, and `ShapeFingerprint` reject unknown fields
 ([Privacy invariants](observations.md#privacy-invariants)). Step 1.2 replaced `ShapeCatalog`
 and `ShapeRecord` with `ObservationCatalog`, removed `OriginRegistry`, and added
-`sources[].id` ([Migration](observations.md#migration)).
+`sources[].id` ([Migration](observations.md#migration)). Step 1.3 replaced `dedupe_key` with
+`envelope`, added the source kinds and `kind: replay`, and applies `sample_rate` in the tentacle
+([Migration](tentacle.md#migration)).
 
 ## Open questions
 

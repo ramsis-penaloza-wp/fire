@@ -66,13 +66,18 @@ declared source ([observations.md](observations.md#ingest-endpoint)).
 Every source has an `id`: required, `^[a-z0-9][a-z0-9_-]*$`, and unique within the system. It
 is the `source` of every observation read from it. Two systems may reuse an id.
 
-| `kind` | Fields |
-|--------|--------|
-| `kinesis` | `id`, `stream_env` (env var holding the stream name), `regions` (one or more), `dedupe_key` (optional) |
+| `kind` | Fields besides `id` |
+|--------|---------------------|
+| `replay` | `direction`, `envelope`, `path_env` |
+| `kinesis` | `direction`, `envelope`, `stream_env`, `regions` |
+| `dynamodb_stream` | `direction`, `envelope`, `table_env`, `regions`, `filter` (optional) |
+| `sns_fanout` | `direction`, `envelope`, `topic_env`, `regions` |
+| `s3_capture` | `bucket_env`, `captures` |
 
-`dedupe_key` names the record field that identifies one event across regions. A system that
-publishes the same event in several regions needs it, or every count doubles. In OMG it is
-`id`, the field of a Kinesis `DomainEvent` that holds the work unit's `work_unit_id`.
+[tentacle.md](tentacle.md#sources-in-the-system-yaml) defines each key. `envelope.event_id`
+identifies one event across regions, so a system that publishes the same event in several
+regions counts it once. It replaced `dedupe_key`; a file that still has it fails to load with a
+message naming `envelope.event_id`.
 
 ### Policy
 
@@ -162,12 +167,14 @@ of 125 in `declared_unseen`: reading Kinesis alone does not cover OMG.
 
 ## Follow-ups
 
-- The tentacle: read `sources`, generalize and fingerprint at the edge, and feed observed
-  events into the catalog. Until then nothing calls `audit_coverage` with real observations.
+- The tentacle ([tentacle.md](tentacle.md)) reads `replay` sources and feeds observed events
+  into the catalog; the other kinds follow in roadmap steps 1.7 and 1.8. Nothing calls
+  `audit_coverage` with real observations yet.
 - Manifest refresh: discovery runs once at startup; a redeploy of the watched system is not
   picked up until FIRE restarts.
 - A Slack notifier that posts to `notify.slack.channel_id`. Today `Incident.project_id` is
   not mapped to a `system`, so the notifier cannot pick a channel yet.
 - A third coverage list for events that exist but pass through no source FIRE reads; it
   needs each source to declare which events it carries.
-- `fingerprinting.sample_rate` is validated but not applied.
+- `fingerprinting.sample_rate` is applied by the tentacle
+  ([Record pipeline](tentacle.md#record-pipeline), step 4); the body does not sample.

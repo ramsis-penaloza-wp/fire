@@ -20,3 +20,14 @@ budgets:
   tier0_ms: 300
   tier1_ms: 3000
   tier2_ms: 1500
+
+# python -m fire.apps.tentacle: how observations reach the body (docs/specs/tentacle.md).
+tentacle:
+  body_url_env: FIRE_BODY_URL  # env var holding the body's base URL
+  batch_size: 200              # observations per request
+  flush_ms: 1000               # longest a partial batch waits
+  buffer_size: 10000           # observations held before reading pauses
+  retry:
+    max_attempts: 6            # per batch
+    backoff_ms: 500            # first backoff; doubles per attempt up to 30 s, full jitter
+  shutdown_s: 10               # time to send what is pending on shutdown

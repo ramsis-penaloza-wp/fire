@@ -5,6 +5,13 @@ from __future__ import annotations
 import os
 
 import pytest
+from canary import Canary
+
+
+@pytest.fixture
+def canary() -> Canary:
+    """Unique values to plant in records, and the checks that find leaks (tests/canary.py)."""
+    return Canary()
 
 
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:

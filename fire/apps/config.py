@@ -2,11 +2,19 @@
 
 from __future__ import annotations
 
+from enum import StrEnum
 from pathlib import Path
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from fire.core.domain.envelope import DottedPath, Envelope
+from fire.core.domain.observation import ChannelDirection
+
+
+class _Strict(BaseModel):
+    model_config = ConfigDict(extra="forbid")
 
 
 class ApiConfig(BaseModel):
@@ -36,12 +44,30 @@ class BudgetsConfig(BaseModel):
     tier2_ms: int = 1500
 
 
+class RetryConfig(_Strict):
+    # The first backoff doubles per attempt up to 30 s, with full jitter.
+    max_attempts: int = Field(default=6, ge=1)
+    backoff_ms: int = Field(default=500, ge=0)
+
+
+class TentacleConfig(_Strict):
+    """How the tentacle sends observations to the body. Contract: docs/specs/tentacle.md."""
+
+    body_url_env: str = Field(default="FIRE_BODY_URL", min_length=1)
+    batch_size: int = Field(default=200, ge=1)
+    flush_ms: int = Field(default=1000, ge=1)
+    buffer_size: int = Field(default=10000, ge=1)
+    retry: RetryConfig = Field(default_factory=RetryConfig)
+    shutdown_s: float = Field(default=10, gt=0)
+
+
 class FireConfig(BaseModel):
     api: ApiConfig = Field(default_factory=ApiConfig)
     reasoner: ReasonerConfig = Field(default_factory=ReasonerConfig)
     narrator: NarratorConfig = Field(default_factory=NarratorConfig)
     notifier: NotifierConfig = Field(default_factory=NotifierConfig)
     budgets: BudgetsConfig = Field(default_factory=BudgetsConfig)
+    tentacle: TentacleConfig = Field(default_factory=TentacleConfig)
 
 
 def load_fire_config(path: Path) -> FireConfig:
@@ -51,10 +77,6 @@ def load_fire_config(path: Path) -> FireConfig:
 
 # Per-system config: what a person decides. What the system contains is discovered, never
 # listed here. Contract: docs/specs/system-config-and-discovery.md.
-
-
-class _Strict(BaseModel):
-    model_config = ConfigDict(extra="forbid")
 
 
 class SlackTarget(_Strict):
@@ -76,13 +98,129 @@ class DiscoveryConfig(_Strict):
     manifest: ManifestConfig | None = None
 
 
-class KinesisSourceConfig(_Strict):
+# Sources: where the tentacle reads. Contract: docs/specs/tentacle.md#sources-in-the-system-yaml.
+
+Slug = Annotated[str, Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")]
+EnvName = Annotated[str, Field(min_length=1)]
+Regions = Annotated[list[Annotated[str, Field(min_length=1)]], Field(min_length=1)]
+
+
+class _Source(_Strict):
     # The `source` of every observation read from it; unique within the system.
-    id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
+    id: Slug
+
+    @model_validator(mode="before")
+    @classmethod
+    def _dedupe_key_was_removed(cls, data: Any) -> Any:
+        if isinstance(data, dict) and "dedupe_key" in data:
+            raise ValueError("dedupe_key was removed: declare envelope.event_id instead")
+        return data
+
+    @property
+    def location_env(self) -> str:
+        """The env var naming what the source reads: a path, stream, table, topic, or bucket."""
+        raise NotImplementedError
+
+
+class EventSourceConfig(_Source):
+    """A source whose records carry events, read through an envelope."""
+
+    direction: ChannelDirection
+    envelope: Envelope
+
+    @field_validator("direction")
+    @classmethod
+    def _events_enter_or_stay(cls, direction: ChannelDirection) -> ChannelDirection:
+        if direction is ChannelDirection.OUTBOUND:
+            raise ValueError("an event source is inbound or internal")
+        return direction
+
+
+class ReplaySourceConfig(EventSourceConfig):
+    kind: Literal["replay"]
+    # A .json file (an object or a list), a .jsonl file, or a directory of them.
+    path_env: EnvName
+
+    @property
+    def location_env(self) -> str:
+        return self.path_env
+
+
+class KinesisSourceConfig(EventSourceConfig):
     kind: Literal["kinesis"]
-    stream_env: str = Field(min_length=1)
-    regions: list[str] = Field(min_length=1)
-    dedupe_key: str | None = None
+    stream_env: EnvName
+    regions: Regions
+
+    @property
+    def location_env(self) -> str:
+        return self.stream_env
+
+
+class DynamoDbStreamFilter(_Strict):
+    attribute: DottedPath
+    equals: str
+
+
+class DynamoDbStreamSourceConfig(EventSourceConfig):
+    kind: Literal["dynamodb_stream"]
+    table_env: EnvName
+    regions: Regions
+    filter: DynamoDbStreamFilter | None = None
+
+    @property
+    def location_env(self) -> str:
+        return self.table_env
+
+
+class SnsFanoutSourceConfig(EventSourceConfig):
+    kind: Literal["sns_fanout"]
+    topic_env: EnvName
+    regions: Regions
+
+    @property
+    def location_env(self) -> str:
+        return self.topic_env
+
+
+class CaptureLayout(StrEnum):
+    WORK_UNIT_ACTION = "work_unit_action"
+    WORK_UNIT_ORDER_ACTION = "work_unit_order_action"
+    WORK_UNIT_ORDER = "work_unit_order"
+
+
+class CaptureConfig(_Strict):
+    prefix: str = Field(min_length=1)
+    # Starts the channel names of this client's calls.
+    label: Slug
+    layout: CaptureLayout
+
+
+class S3CaptureSourceConfig(_Source):
+    kind: Literal["s3_capture"]
+    bucket_env: EnvName
+    captures: list[CaptureConfig] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def _prefixes_are_unique(self) -> S3CaptureSourceConfig:
+        prefixes = [capture.prefix for capture in self.captures]
+        duplicates = sorted({prefix for prefix in prefixes if prefixes.count(prefix) > 1})
+        if duplicates:
+            raise ValueError(f"duplicate capture prefixes: {', '.join(duplicates)}")
+        return self
+
+    @property
+    def location_env(self) -> str:
+        return self.bucket_env
+
+
+SourceConfig = Annotated[
+    ReplaySourceConfig
+    | KinesisSourceConfig
+    | DynamoDbStreamSourceConfig
+    | SnsFanoutSourceConfig
+    | S3CaptureSourceConfig,
+    Field(discriminator="kind"),
+]
 
 
 class PolicyConfig(_Strict):
@@ -102,11 +240,11 @@ class FingerprintingConfig(_Strict):
 
 
 class SystemConfig(_Strict):
-    system: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
+    system: Slug
     display_name: str
     notify: NotifyConfig
     discovery: DiscoveryConfig = Field(default_factory=DiscoveryConfig)
-    sources: list[KinesisSourceConfig] = Field(default_factory=list)
+    sources: list[SourceConfig] = Field(default_factory=list)
     policy: PolicyConfig = Field(default_factory=PolicyConfig)
     fingerprinting: FingerprintingConfig = Field(default_factory=FingerprintingConfig)
 
