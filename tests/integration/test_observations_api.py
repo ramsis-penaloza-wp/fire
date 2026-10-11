@@ -519,7 +519,7 @@ def test_canary_in_rejected_items_reaches_neither_responses_nor_logs(
         _post(client, {"shapes": CANARY}),
         client.post(
             "/v0/diagnose",
-            json={"project_id": "proj-a", "shape": {"fields": [planted_field]}},
+            json={"system": "shop", "shape": {"fields": [planted_field]}},
             headers=HEADERS,
         ),
         client.get("/v0/systems/shop/streams", headers=HEADERS),

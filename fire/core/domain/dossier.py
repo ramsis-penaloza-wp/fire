@@ -90,11 +90,18 @@ class ShapeFingerprint(BaseModel):
     notes: str | None = None
 
 
+class HopVia(StrEnum):
+    """How an edge hop was traversed: a parent-child span edge, or a span link."""
+
+    CHILD = "child"
+    LINK = "link"
+
+
 class ProcessHop(BaseModel):
     """One hop on the path by reference — shape-safe; never embeds Shape.
 
     A hop is either a node (`ref`) or an edge (`from_ref` and/or `to_ref`). Every ref
-    is an origin_id or a service name.
+    is an origin_id or a service name. `via` is set on edge hops only.
     """
 
     ref: str | None = Field(default=None, min_length=1, description="Node: origin_id or service")
@@ -107,6 +114,7 @@ class ProcessHop(BaseModel):
     operation: str | None = None
     span_kind: str | None = None
     status: str | None = None
+    via: HopVia | None = None
 
     @model_validator(mode="after")
     def _require_one_identity_form(self) -> ProcessHop:
@@ -115,6 +123,8 @@ class ProcessHop(BaseModel):
             raise ValueError("ProcessHop is either a node (ref) or an edge (from_ref/to_ref)")
         if self.ref is None and not is_edge:
             raise ValueError("ProcessHop needs ref, from_ref, or to_ref")
+        if self.via is not None and not is_edge:
+            raise ValueError("via marks an edge hop; a node hop has none")
         return self
 
     def display_label(self) -> str:
@@ -148,7 +158,7 @@ class Dossier(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     incident_id: str
-    project_id: str
+    system: str
     service: str | None = None
     origin: Origin | None = None
     shape: Shape | None = None

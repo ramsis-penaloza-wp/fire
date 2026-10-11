@@ -10,11 +10,14 @@ from fire.core.domain.narration import Narration
 
 
 class ConsoleNotifier:
+    """Prints each notification to `stream`, else to the `sys.stdout` current at publish."""
+
     def __init__(self, stream: TextIO | None = None) -> None:
-        self._stream = stream or sys.stdout
+        self._stream = stream
 
     async def publish(self, incident: Incident, narration: Narration) -> None:
         print(
-            f"[fire] notify incident={incident.id}\n{narration.channel_text}\n",
-            file=self._stream,
+            f"[fire] notify incident={incident.id} system={incident.system} "
+            f"trigger={incident.trigger}\n{narration.channel_text}\n",
+            file=self._stream or sys.stdout,
         )

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 import pytest
@@ -13,7 +14,7 @@ from fire.core.domain.dossier import Shape, ValueType
 from fire.core.domain.drift import DriftSignal, FieldRef, ShapeDiff
 from fire.core.domain.ingest import IngestCounts, Rejection, RejectionReason
 from fire.core.domain.observation import ShapeObservation, SpanObservation
-from fire.core.services.ingest import IngestService
+from fire.core.services.ingest import DriftHook, IngestService
 
 SOURCES = {"shop": frozenset({"order-events", "traces"}), "billing": frozenset()}
 SHAPE = {"fields": [{"path": "order_id", "value_type": "string"}]}
@@ -85,18 +86,18 @@ def warm_catalog() -> MemoryObservationCatalog:
 
 
 @pytest.fixture
+def warm_service(warm_catalog: MemoryObservationCatalog) -> IngestService:
+    return IngestService(warm_catalog, Sha256ShapeFingerprinter(), SOURCES)
+
+
+@pytest.fixture
 def calls() -> list[Call]:
     return []
 
 
 @pytest.fixture
-def hooked(warm_catalog: MemoryObservationCatalog, calls: list[Call]) -> IngestService:
-    return IngestService(
-        warm_catalog,
-        Sha256ShapeFingerprinter(),
-        SOURCES,
-        on_drift=lambda observation, signal: calls.append((observation, signal)),
-    )
+def hook(calls: list[Call]) -> DriftHook:
+    return lambda observation, signal: calls.append((observation, signal))
 
 
 def _rejected(reason: RejectionReason, index: int = 0) -> IngestCounts:
@@ -233,7 +234,7 @@ def test_rejection_fields_only_on_invalid() -> None:
 
 @pytest.mark.unit
 def test_drift_hook_is_called_once_with_the_observation_that_raised_the_signal(
-    hooked: IngestService, calls: list[Call]
+    warm_service: IngestService, hook: DriftHook, calls: list[Call]
 ) -> None:
     batch = [
         *WARMUP,
@@ -243,7 +244,7 @@ def test_drift_hook_is_called_once_with_the_observation_that_raised_the_signal(
         _shape(observation_id="obs-5", **COUPON),
     ]
 
-    report = hooked.ingest(batch, [])
+    report = warm_service.ingest(batch, [], on_drift=hook)
 
     assert report.shapes == IngestCounts(accepted=6)
     [(observation, signal)] = calls
@@ -259,13 +260,15 @@ def test_drift_hook_is_called_once_with_the_observation_that_raised_the_signal(
 
 @pytest.mark.unit
 def test_a_later_batch_with_a_known_drift_calls_nothing(
-    hooked: IngestService, calls: list[Call]
+    warm_service: IngestService, hook: DriftHook, calls: list[Call]
 ) -> None:
-    hooked.ingest([*WARMUP, _shape(observation_id="obs-2", **COUPON)], [])
+    warm_service.ingest([*WARMUP, _shape(observation_id="obs-2", **COUPON)], [], on_drift=hook)
     assert len(calls) == 1
 
-    report = hooked.ingest(
-        [_shape(observation_id="obs-3", **COUPON), _shape(observation_id="obs-4", **COUPON)], []
+    report = warm_service.ingest(
+        [_shape(observation_id="obs-3", **COUPON), _shape(observation_id="obs-4", **COUPON)],
+        [],
+        on_drift=hook,
     )
 
     assert report.shapes == IngestCounts(accepted=2)
@@ -273,11 +276,32 @@ def test_a_later_batch_with_a_known_drift_calls_nothing(
 
 
 @pytest.mark.unit
+def test_each_call_reports_its_own_signals_to_its_own_hook(warm_service: IngestService) -> None:
+    first: list[Call] = []
+    second: list[Call] = []
+    gift = _form("order_id", "gift")
+
+    warm_service.ingest(
+        [*WARMUP, _shape(observation_id="obs-2", **COUPON)],
+        [],
+        on_drift=lambda observation, signal: first.append((observation, signal)),
+    )
+    warm_service.ingest(
+        [_shape(observation_id="obs-3", **COUPON), _shape(observation_id="obs-4", **gift)],
+        [],
+        on_drift=lambda observation, signal: second.append((observation, signal)),
+    )
+
+    assert [observation.observation_id for observation, _ in first] == ["obs-2"]
+    assert [observation.observation_id for observation, _ in second] == ["obs-4"]
+
+
+@pytest.mark.unit
 @pytest.mark.parametrize(
     "paths", [("coupon", "gift"), ("gift", "coupon")], ids=["coupon-first", "gift-first"]
 )
 def test_two_new_signals_in_one_batch_call_the_hook_in_batch_order(
-    hooked: IngestService, calls: list[Call], paths: tuple[str, str]
+    warm_service: IngestService, hook: DriftHook, calls: list[Call], paths: tuple[str, str]
 ) -> None:
     first, second = paths
     batch = [
@@ -287,7 +311,7 @@ def test_two_new_signals_in_one_batch_call_the_hook_in_batch_order(
         _shape(observation_id=f"obs-{second}", **_form("order_id", second)),
     ]
 
-    hooked.ingest(batch, [])
+    warm_service.ingest(batch, [], on_drift=hook)
 
     assert [observation.observation_id for observation, _ in calls] == [
         f"obs-{first}",
@@ -300,7 +324,7 @@ def test_two_new_signals_in_one_batch_call_the_hook_in_batch_order(
 
 @pytest.mark.unit
 def test_drift_hook_runs_after_the_whole_batch_is_counted(
-    warm_catalog: MemoryObservationCatalog,
+    warm_catalog: MemoryObservationCatalog, warm_service: IngestService
 ) -> None:
     seen: list[tuple[int, int, bool]] = []
 
@@ -309,8 +333,7 @@ def test_drift_hook_runs_after_the_whole_batch_is_counted(
         span_stored = not warm_catalog.add_span(SpanObservation.model_validate(_span()))
         seen.append((stream.observations, stream.drift[0].occurrences, span_stored))
 
-    service = IngestService(warm_catalog, Sha256ShapeFingerprinter(), SOURCES, on_drift=hook)
-    service.ingest(
+    warm_service.ingest(
         [
             *WARMUP,
             _shape(observation_id="obs-2", **COUPON),
@@ -318,6 +341,7 @@ def test_drift_hook_runs_after_the_whole_batch_is_counted(
             _shape(observation_id="obs-4", **COUPON),
         ],
         [_span()],
+        on_drift=hook,
     )
 
     assert seen == [(5, 2, True)]
@@ -325,18 +349,20 @@ def test_drift_hook_runs_after_the_whole_batch_is_counted(
 
 @pytest.mark.unit
 def test_drifted_items_count_as_accepted_and_their_resends_as_duplicate(
-    hooked: IngestService, calls: list[Call]
+    warm_service: IngestService, hook: DriftHook, calls: list[Call]
 ) -> None:
     drifted = _shape(observation_id="obs-2", **COUPON)
-    report = hooked.ingest([*WARMUP, drifted, drifted], [])
+    report = warm_service.ingest([*WARMUP, drifted, drifted], [], on_drift=hook)
     assert report.shapes == IngestCounts(accepted=3, duplicate=1)
     assert len(calls) == 1
 
 
 @pytest.mark.unit
-def test_a_rejected_drifted_item_calls_nothing(hooked: IngestService, calls: list[Call]) -> None:
+def test_a_rejected_drifted_item_calls_nothing(
+    warm_service: IngestService, hook: DriftHook, calls: list[Call]
+) -> None:
     drifted = _shape(observation_id="obs-2", **{**COUPON, "fingerprint": MISMATCH})
-    report = hooked.ingest([*WARMUP, drifted], [])
+    report = warm_service.ingest([*WARMUP, drifted], [], on_drift=hook)
     assert report.shapes == IngestCounts(
         accepted=2, rejected=[Rejection(index=2, reason=RejectionReason.FINGERPRINT_MISMATCH)]
     )
@@ -344,9 +370,46 @@ def test_a_rejected_drifted_item_calls_nothing(hooked: IngestService, calls: lis
 
 
 @pytest.mark.unit
-def test_drift_without_a_hook_is_still_recorded(warm_catalog: MemoryObservationCatalog) -> None:
-    service = IngestService(warm_catalog, Sha256ShapeFingerprinter(), SOURCES)
-    report = service.ingest([*WARMUP, _shape(observation_id="obs-2", **COUPON)], [])
+def test_a_hook_that_raises_is_logged_without_its_message_and_the_next_signal_still_runs(
+    warm_service: IngestService, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.ERROR)
+    called: list[str] = []
+
+    def hook(observation: ShapeObservation, signal: DriftSignal) -> None:
+        called.append(observation.observation_id)
+        if len(called) == 1:
+            raise RuntimeError("planted-hook-message")
+
+    report = warm_service.ingest(
+        [
+            *WARMUP,
+            _shape(observation_id="obs-coupon", **COUPON),
+            _shape(observation_id="obs-gift", **_form("order_id", "gift")),
+        ],
+        [],
+        on_drift=hook,
+    )
+
+    assert report.shapes == IngestCounts(accepted=4)
+    assert called == ["obs-coupon", "obs-gift"]
+    assert caplog.record_tuples == [
+        (
+            "fire.core.services.ingest",
+            logging.ERROR,
+            "drift hook failed: system=shop source=order-events "
+            "stream=event:internal:order.created:payload "
+            f"fingerprint={COUPON['fingerprint']['schema_hash']} error=RuntimeError",
+        )
+    ]
+    assert "planted-hook-message" not in caplog.text
+
+
+@pytest.mark.unit
+def test_drift_without_a_hook_is_still_recorded(
+    warm_catalog: MemoryObservationCatalog, warm_service: IngestService
+) -> None:
+    report = warm_service.ingest([*WARMUP, _shape(observation_id="obs-2", **COUPON)], [])
     assert report.shapes == IngestCounts(accepted=3)
     [stream] = warm_catalog.streams("shop")
     assert [signal.occurrences for signal in stream.drift] == [1]

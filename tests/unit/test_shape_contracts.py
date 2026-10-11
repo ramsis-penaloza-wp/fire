@@ -12,7 +12,7 @@ import fire.apps.incident_engine.app as app_module
 from fire.apps.incident_engine.app import DiagnoseRequest, app
 from fire.apps.incident_engine.wiring import build_container
 from fire.core.domain.dossier import Shape, ShapeField, ShapeFingerprint, ValueType
-from fire.core.domain.incident import Incident
+from fire.core.domain.incident import Incident, Trigger
 
 
 @pytest.mark.unit
@@ -48,7 +48,7 @@ def test_diagnose_rejects_a_value_inside_the_shape(monkeypatch: pytest.MonkeyPat
     monkeypatch.setenv("FIRE_API_TOKEN", "test-fire-token")
     app_module._container = build_container()
     body = {
-        "project_id": "proj-a",
+        "system": "omg",
         "shape": {"fields": [{"path": "x", "value_type": "string", "value": "planted-value"}]},
     }
     with TestClient(app) as client:
@@ -63,12 +63,35 @@ def test_diagnose_rejects_a_value_inside_the_shape(monkeypatch: pytest.MonkeyPat
 
 
 @pytest.mark.unit
-def test_incident_uses_project_id() -> None:
-    incident = Incident(id="i1", project_id="proj-a", service="payments")
-    dumped = incident.model_dump()
-    assert "system" not in dumped
-    assert dumped["project_id"] == "proj-a"
+def test_incident_uses_system_and_trigger() -> None:
+    incident = Incident(id="i1", system="omg", trigger=Trigger.MANUAL, service="payments")
+    dumped = incident.model_dump(mode="json")
+    assert "project_id" not in dumped
+    assert dumped["system"] == "omg"
+    assert dumped["trigger"] == "manual"
     assert dumped["service"] == "payments"
+
+
+@pytest.mark.unit
+def test_incident_trigger_values() -> None:
+    assert [trigger.value for trigger in Trigger] == [
+        "shape_drift",
+        "path_drift",
+        "incident_io",
+        "http_errors",
+        "manual",
+    ]
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "data",
+    [{"id": "i1", "system": "omg"}, {"id": "i1", "system": "omg", "trigger": "pager"}],
+    ids=["missing", "unknown"],
+)
+def test_incident_requires_a_known_trigger(data: dict[str, Any]) -> None:
+    with pytest.raises(ValidationError):
+        Incident.model_validate(data)
 
 
 @pytest.mark.unit
@@ -76,7 +99,7 @@ def test_diagnose_request_nests_shape(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("FIRE_API_TOKEN", "test-fire-token")
     app_module._container = build_container()
     body = DiagnoseRequest(
-        project_id="proj-a",
+        system="omg",
         shape=Shape(fields=[ShapeField(path="x", value_type=ValueType.STRING)]),
     )
     assert body.fingerprint is None
