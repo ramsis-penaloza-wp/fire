@@ -11,7 +11,8 @@ from pydantic import ValidationError
 
 from fire.apps.config import SystemConfig, load_system_config, load_system_configs
 
-TEMPLATE = Path(__file__).resolve().parents[2] / "config" / "systems" / "_template.yml"
+SYSTEMS = Path(__file__).resolve().parents[2] / "config" / "systems"
+TEMPLATE = SYSTEMS / "_template.yml"
 
 
 def _minimal(**overrides: Any) -> dict[str, Any]:
@@ -36,6 +37,11 @@ def test_template_is_a_valid_system_config() -> None:
     assert config.notify.slack.channel_id == "C0123456789"
     assert config.discovery.manifest is not None
     assert config.sources[0].dedupe_key == "work_unit_id"
+
+
+@pytest.mark.unit
+def test_repo_system_configs_are_valid() -> None:
+    assert "omg" in load_system_configs(SYSTEMS)
 
 
 @pytest.mark.unit

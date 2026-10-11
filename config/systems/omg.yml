@@ -1,0 +1,31 @@
+# Order Management Gateway (order-management-gateway).
+# Decisions only; OMG's events, processors, and ingress are discovered from its manifest.
+# Contract: docs/specs/system-config-and-discovery.md
+system: omg
+display_name: Order Management Gateway
+
+notify:
+  slack:
+    # Placeholder, not a real channel. OMG's channel id is still an open question in
+    # docs/specs/ingest-drift-and-feedback.md; replace it before the Slack notifier ships.
+    channel_id: C0000000000
+
+# OMG commits its event graph at scripts/event_chains/event_chains_graph.json
+# (regenerated with `make event-chains/generate`).
+discovery:
+  manifest:
+    kind: event_chains_graph
+    path_env: OMG_MANIFEST_PATH
+
+# Where the tentacle reads from (not consumed yet).
+sources:
+  # kinesis-publisher runs in every region, so the same DomainEvent can appear in both
+  # streams. Its `id` is the work unit's work_unit_id.
+  - kind: kinesis
+    stream_env: OMG_EVENTS_STREAM
+    regions: [us-east-1, us-west-2]
+    dedupe_key: id
+
+# DLQ attribution joins abandoned work units to observations, so every event is fingerprinted.
+fingerprinting:
+  sample_rate: 1.0

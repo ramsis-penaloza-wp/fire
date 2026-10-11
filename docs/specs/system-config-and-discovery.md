@@ -67,8 +67,8 @@ The tentacle reads `sources`; the engine only validates them for now.
 | `kinesis` | `stream_env` (env var holding the stream name), `regions` (one or more), `dedupe_key` (optional) |
 
 `dedupe_key` names the record field that identifies one event across regions. A system that
-publishes the same event in several regions (`work_unit_id` in OMG) needs it, or every count
-doubles.
+publishes the same event in several regions needs it, or every count doubles. In OMG it is
+`id`, the field of a Kinesis `DomainEvent` that holds the work unit's `work_unit_id`.
 
 ### Policy
 

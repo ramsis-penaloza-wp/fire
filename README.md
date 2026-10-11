@@ -113,10 +113,12 @@ Reasoner ≠ Narrator ≠ Notifier, Echo/Template/Console stubs, FastAPI
 `POST /v0/diagnose` (auth fail-closed), config templates, unit tests.
 The engine computes a shape fingerprint when a shape arrives without one, validates
 `config/systems/*.yml` at startup, and discovers each system's inventory from its
-manifest (`event_chains_graph` format) for the coverage audit.
+manifest (`event_chains_graph` format) for the coverage audit. OMG is the first
+watched system (`config/systems/omg.yml`; set `OMG_MANIFEST_PATH` to its event graph).
+Agent rules for this repo live in `.cursor/rules/`.
 
 Next: Laya/Jev System One adapter, OpenAI-compat Narrator, Slack notifier,
-real collectors — still no Panoptes copy / no `omg.yml`.
+real collectors (roadmap: `docs/specs/ingest-drift-and-feedback.md`) — still no Panoptes copy.
 
 No copy of Panoptes source into this tree — ideas and layering only.
 No published accuracy claims; no “FIRE benchmark” numbers in docs until measured.

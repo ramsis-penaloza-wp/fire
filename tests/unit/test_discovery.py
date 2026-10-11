@@ -114,6 +114,31 @@ def test_build_container_loads_systems_and_discoveries(
 
 
 @pytest.mark.unit
+def test_engine_discovers_omg_from_its_manifest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    graph = tmp_path / "graph.json"
+    graph.write_text(json.dumps(GRAPH), encoding="utf-8")
+    monkeypatch.setenv("OMG_MANIFEST_PATH", str(graph))
+
+    inventory = build_container().discoveries["omg"].inventory
+
+    assert inventory is not None
+    assert inventory.system == "omg"
+    assert inventory.event_names() == {"order.created"}
+
+
+@pytest.mark.unit
+def test_engine_starts_without_omg_manifest(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("OMG_MANIFEST_PATH", raising=False)
+
+    discovery = build_container().discoveries["omg"]
+
+    assert discovery.inventory is None
+    assert discovery.missing_reason == "OMG_MANIFEST_PATH is not set"
+
+
+@pytest.mark.unit
 def test_build_container_rejects_unknown_manifest_kind(tmp_path: Path) -> None:
     (tmp_path / "fire.yml").write_text("{}", encoding="utf-8")
     systems = tmp_path / "systems"
