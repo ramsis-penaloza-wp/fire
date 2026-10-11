@@ -9,8 +9,21 @@ supersedes the [Tentacle](ingest-drift-and-feedback.md#tentacle) and
 of the main spec and the [Sources](system-config-and-discovery.md#sources) section of the
 config spec. OMG is the example throughout; no code names it.
 
-**Status: proposal.** Roadmap steps 1.3, 1.7, and 1.8 implement it; each step's pull request
-turns the matching section into the contract of the shipped code.
+**Status:** roadmap steps 1.3, 1.7, and 1.8 implement it. [Process](#process),
+[Sending to the body](#sending-to-the-body), [Record pipeline](#record-pipeline),
+[Sources in the system YAML](#sources-in-the-system-yaml), [Envelope](#envelope),
+[Privacy](#privacy), and [Canary harness](#canary-harness) are the contract of the shipped code
+(step 1.3), and so is the `replay` kind. The other kinds load and validate in the system YAML,
+but their readers, described in [Kinds](#kinds), are a proposal until steps 1.7 and 1.8.
+
+| Module | Holds |
+|--------|-------|
+| `fire/apps/tentacle/` | `__main__.py` (the CLI), `runner.py` (startup and the run loop), `sender.py`, `counters.py`, `sources.py` (readers by kind) |
+| `fire/core/ports/record_source.py` | `RecordSource`, `RawRecord`, `StartPosition` |
+| `fire/core/services/record_pipeline.py` | `RecordPipeline` and its reason codes |
+| `fire/core/domain/envelope.py` | `Envelope` and its path models |
+| `fire/adapters/sources/replay.py` | `ReplayRecordSource` |
+| `fire/apps/config.py` | `TentacleConfig` and one model per source kind |
 
 ## Process
 
@@ -19,16 +32,23 @@ python -m fire.apps.tentacle --system omg [--source <id>] [--start latest|oldest
 ```
 
 - It loads `.env` (`load_fire_env`), `config/fire.yml`, and `config/systems/<system>.yml`; no
-  manifest. It runs every source, or the one `--source` names. A source whose env var is unset
-  is logged as missing and skipped, unless `--source` names it. An unknown source id or an
-  unset token or body URL env var is a startup error.
+  manifest. It runs every source, or the one `--source` names. A source whose env var is unset,
+  or whose kind has no reader yet, is logged as skipped with that reason, unless `--source`
+  names it.
+- Startup errors: a config that fails to load, a `--system` that is not a system id or has no
+  file, an unknown `--source`, an unset `api.token_env` or `tentacle.body_url_env`, a body URL
+  that is not `http` or `https`, a named source that would be skipped, a source whose env var
+  names nothing it can read (a `replay` path that is no `.json` or `.jsonl` file and no
+  directory), and no source left to run. Messages name env vars, never their values.
 - A `replay` source ends when its files are read; live sources run until `SIGINT` or
   `SIGTERM`. `--start latest` (the default) reads what is written after start; `oldest` reads
-  what a source still retains. Positions live in memory, so a restart begins at `--start` and
-  the body's dedupe absorbs the overlap.
-- On shutdown it stops reading, sends what is pending within `shutdown_s`, and logs its
-  counters. Exit code `0`: every record was sent, skipped, or rejected with a counted reason;
-  `1`: some observation is unsent; `2`: config or startup error.
+  what a source still retains; `replay` ignores it. Positions live in memory, so a restart
+  begins at `--start` and the body's dedupe absorbs the overlap.
+- When every source has ended, or on a signal, it stops reading, sends what is pending within
+  `shutdown_s`, counts what is still pending as unsent, and logs its counters. Exit code `0`:
+  every record was sent, skipped, or rejected with a counted reason; `1`: some observation is
+  unsent, or a source failed (logged by exception type); `2`: config or startup error,
+  including bad arguments.
 
 ### Sending to the body
 
@@ -42,57 +62,82 @@ python -m fire.apps.tentacle --system omg [--source <id>] [--start latest|oldest
 | `retry.max_attempts`, `retry.backoff_ms` | `6`, `500` | Attempts per batch; first backoff, doubled per attempt up to 30 s, with full jitter |
 | `shutdown_s` | `10` | Time to drain on shutdown |
 
-- Batches go to `POST /v0/observations` with `X-FIRE-Token`
-  ([observations.md](observations.md#ingest-endpoint)). A connection error, a timeout, `408`,
-  `429`, or a `5xx` is retried; any other `4xx`, including `401`, is not.
-- A batch that runs out of attempts or is refused is counted as unsent and logged by size,
-  source ids, and status. A full buffer pauses reading instead of dropping. A source
-  acknowledges a record (a queue deletes the message) only after the body answered `202` for
-  the batch that carries it.
+- Batches go to `{body URL}/v0/observations` with `X-FIRE-Token`
+  ([observations.md](observations.md#ingest-endpoint)), with a 10 s request timeout. A batch
+  holds one source's observations, so the body's counts are that source's. A connection
+  error, a timeout, `408`, `429`, or a `5xx` is retried; any other status, including `401`, is
+  not.
+- A batch that runs out of attempts or is refused is counted as unsent and logged as
+  `batch unsent: source=<id> size=<n> status=<HTTP status or exception type> attempts=<n>`. A
+  full buffer pauses reading instead of dropping.
+- A source acknowledges a record (a queue deletes the message) only after the body answered
+  `202` for the batch that carries it. A skipped or rejected record is acknowledged at once,
+  since no batch will carry it. A failing ack is logged by exception type and stops nothing.
 
 Counters, per source, are logged every 60 s and at exit as one line of numbers and reason
 codes: `read` (an `s3_capture` record is one pair), `built`, `sent` (in batches answered
-`202`), `unsent`, `rejected` and `skipped` by the reasons below, and the body's `duplicate` and
-`rejected` counts by its reasons. `sent + unsent + pending = built` at all times.
+`202`), `unsent`, `pending`, `rejected` and `skipped` by the reasons below, and the body's
+`duplicate` and `rejected` counts by its reasons. `sent + unsent + pending = built` at all
+times. Reasons are `reason:count` pairs sorted by reason, or `-`:
+
+```
+tentacle counters: source=work-unit-samples read=21 built=4 sent=4 unsent=0 pending=0
+  rejected=missing_event_id:17 skipped=- body_duplicate=0 body_rejected=-
+```
 
 ## Record pipeline
 
-Port `RecordSource` (`fire/core/ports/record_source.py`): an async iterator of `RawRecord`s,
-each holding the source id, the region it was read from (`None` when the source has none), the
-decoded record, and an `ack` the sender calls once the body accepts it; its `repr` omits the
-record. Adapters live in `fire/adapters/sources/`. AWS adapters call `boto3` through
+Port `RecordSource` (`fire/core/ports/record_source.py`): `records()` is an async iterator of
+`RawRecord`s, each holding the source id, the region it was read from (`None` when the source
+has none), the decoded record (`None` when the wire form did not decode to a JSON object), and
+an async `ack` the sender calls once the body accepts it; its `repr` omits the record and the
+ack. Adapters live in `fire/adapters/sources/`, and `READERS` in `fire/apps/tentacle/sources.py`
+maps each kind to the one that opens it. AWS adapters call `boto3` through
 `asyncio.to_thread`, with endpoints and credentials from the standard AWS environment
 (`AWS_ENDPOINT_URL` for localstack), never from FIRE config.
 
-1. **Decode** the wire form into a JSON value, as each kind says. Failure: `undecodable`.
-2. **Filter**, for a `dynamodb_stream` with `filter`. No match: `skipped: filtered`.
-3. **Envelope.** An absent or `null` required value is `missing_<key>`. Ids must be non-empty
-   strings. `event_type` must match `^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$`, or the record is
-   `bad_name`. `occurred_at` is ISO 8601, read as UTC without an offset, or `bad_timestamp`.
+`RecordPipeline` (`fire/core/services/record_pipeline.py`) runs one source's records through
+these steps; the first failing step decides.
+
+1. **Decode** the wire form into a JSON object, as each kind says; the adapter does this. A
+   record with no object: `undecodable`.
+2. **Filter**, for a `dynamodb_stream` with `filter` (step 1.8). No match: `skipped: filtered`.
+3. **Envelope**, in key order: `event_id`, `event_type`, `occurred_at`, `payload`, `work_id`,
+   `correlation_id`. An absent or `null` required value is `missing_<key>`; an absent optional
+   one leaves its field `null`. Ids must be non-empty strings, or the record is `bad_id`.
+   `event_type` must match `^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$` in full, or the record is
+   `bad_name`. `occurred_at` is ISO 8601, read as UTC without an offset, or with `epoch` an
+   integer in that unit; anything else is `bad_timestamp`. The payload may be any JSON value
+   but `null`.
 4. **Sample.** Kept when the first 8 bytes of SHA-256 of `observation_id`, as an integer over
    2^64, fall below `fingerprinting.sample_rate`; else `skipped: sampled_out`. Every region and
    source makes the same choice for one event, so joins stay whole.
-5. **Local dedupe.** A repeat of one of the last 100 000 `(source, observation_id)` pairs is
+5. **Local dedupe.** A repeat of one of the source's last 100 000 observation ids is
    `skipped: local_duplicate`. This saves work only; the body is authoritative.
 6. **Generalize** with `FlatStarShapeGeneralizer`, **fingerprint** with
    `Sha256ShapeFingerprinter`, and **build** the `ShapeObservation`: `observed_at` is the read
    time, the channel `event:{direction}:{event_type}:payload` (`s3_capture` has its own, below).
-   A validation failure is `invalid`. The sender gets the observation; nothing keeps the record.
+   A failure here is `invalid`: an id longer than 256 characters, a string that is not valid
+   Unicode (a lone surrogate), or a payload nested too deep to generalize. The sender gets the
+   observation; nothing keeps the record.
 
 ## Sources in the system YAML
 
-`sources` is a list discriminated by `kind`. Unknown keys are rejected at every level.
+`sources` is a list discriminated by `kind` (`SourceConfig` in `fire/apps/config.py`).
+Unknown keys are rejected at every level, so an error's location names the kind:
+`sources.0.kinesis.regions`. An unknown `kind` fails at `sources.0`.
 
 | Key | Kinds | Meaning |
 |-----|-------|---------|
 | `id` | all | Unique within the system, `^[a-z0-9][a-z0-9_-]*$`; the observations' `source` |
 | `kind` | all | See [Kinds](#kinds) |
-| `direction` | event-carrying | `inbound` for external events, `internal` for the system's own |
+| `direction` | event-carrying | `inbound` for external events, `internal` for the system's own; `outbound` is rejected |
 | `envelope` | event-carrying | Where each envelope value is in a record |
 
-The event-carrying kinds are `replay`, `kinesis`, `dynamodb_stream`, and `sns_fanout`. A
-`*_env` key names an env var holding a path or a resource name, never a credential, and each
-one appears in `.env.example`.
+The event-carrying kinds are `replay`, `kinesis`, `dynamodb_stream`, and `sns_fanout`
+(`EventSourceConfig`); `s3_capture` takes neither key. A `*_env` key names an env var holding a
+path or a resource name, never a credential, and each one appears in `.env.example`. Each
+model's `location_env` names that key's env var.
 
 ### Envelope
 
@@ -104,9 +149,15 @@ one appears in `.env.example`.
 | `payload` | yes | The value generalized into `shape` |
 | `work_id`, `correlation_id` | no | The fields of the same name |
 
-- A path is object keys joined by `.`, such as `metadata.timestamp`; no indexes or wildcards.
-- The long form `{path: SK, strip_prefix: "EVENT#"}` removes a literal prefix; a value without
-  it counts as missing. For `occurred_at`, `{path: ts, epoch: ms}` (or `s`) reads an integer.
+`Envelope` (`fire/core/domain/envelope.py`) rejects unknown keys.
+
+- A path is object keys joined by `.`, such as `metadata.timestamp`; no empty key, and no `[`,
+  `]`, or `*`, so no indexes or wildcards. A key that is absent, or a parent that is not an
+  object, reads as absent.
+- The short form is the path; the long form is `{path: ...}` plus options. On ids, names, and
+  `occurred_at`, `{path: SK, strip_prefix: "EVENT#"}` removes a literal prefix; a value without
+  it, or that is not a string, counts as missing. For `occurred_at` only, `{path: ts, epoch:
+  ms}` (or `s`) reads an integer, and takes no `strip_prefix`. `payload` takes only `path`.
 - `envelope.event_id` replaces `dedupe_key`. One event read from two regions of one source is
   one observation; one event read by two sources is two, each with its own baseline.
 - `replay`, `kinesis`, `dynamodb_stream`, and `sns_fanout` set no `trace_id` or `span_id`, so
@@ -124,12 +175,16 @@ one appears in `.env.example`.
 | `s3_capture` | `bucket_env`, `captures` | One request and response pair |
 | `otlp`, `http_proxy` | [http-and-span-capture.md](http-and-span-capture.md) | |
 
-`regions` are read in parallel. A record's region is the one it was read from, never one named
-inside the record. [Migration](#migration) shows each kind in OMG's file.
+`regions` (one or more) are read in parallel. A record's region is the one it was read from,
+never one named inside the record. [Migration](#migration) shows each kind in OMG's file. Only
+`replay` has a reader in step 1.3; the tentacle skips the other kinds, as [Process](#process)
+says.
 
-**`replay`.** `path_env` holds a `.json` file (an object or a list), a `.jsonl` file, or a
-directory of them, read in name order and not recursively. An element that is not an object
-is `undecodable`. Replay records have no region.
+**`replay`** (`ReplayRecordSource`). `path_env` holds a `.json` file (an object or a list), a
+`.jsonl` file, or a directory of them, read in name order and not recursively; other files and
+subdirectories are ignored. Each object is a record. An element or line that is not an object,
+and a file or line that is not JSON or not UTF-8, is one `undecodable` record. Blank `.jsonl`
+lines are not records. Replay records have no region, and their ack does nothing.
 
 **`kinesis`.** Polls `GetRecords` per shard and region, following shard splits and merges.
 `stream_env` holds the stream name, the same in every region. OMG's `domain_events` records
@@ -162,8 +217,9 @@ question 10. A queue the system reads directly, such as OMG's `money_outcomes`, 
 source: reading it takes messages from the system.
 
 **`s3_capture`.** Reads the request and response pairs a system's clients write to a bucket.
-`bucket_env` holds the bucket name. Each `captures` entry gives a client's key `prefix`, the
-`label` that starts its channel names (`^[a-z0-9][a-z0-9_-]*$`), and its `layout`.
+`bucket_env` holds the bucket name. Each `captures` entry (one or more) gives a client's key
+`prefix` (unique within the source), the `label` that starts its channel names
+(`^[a-z0-9][a-z0-9_-]*$`), and its `layout`.
 
 - Every 5 s the source lists each prefix's `responses/` and reads each new response once it is
   10 s old, so both halves have landed, with the request of the same stem. An object matching
@@ -206,26 +262,34 @@ counts. Never values, URLs whose path or query carries values, headers, or bodie
 
 ### Canary harness
 
-`tests/canary.py`, used through a `canary` fixture. Every source kind passes it.
+`Canary` in `tests/canary.py`, used through the `canary` fixture of `tests/conftest.py`. Every
+source kind with a reader passes it; `tests/integration/test_tentacle_canary.py` runs it.
 
 - `plant(value)` replaces every leaf with a unique canary: strings plain, as an email, or as a
   URI, so the string refinements run; numbers as unique integers above 10^12. Booleans and
-  nulls stay, since they cannot be made unique.
-- Each kind's fixture wraps the planted payload in its wire form and plants every other field
-  too: the rest of the record, DynamoDB keys, SNS attributes, a capture's `url`, `headers`, and
-  `error`, and an S3 key's order id. Envelope values get valid unique ids, names, and
-  timestamps, and must appear only in their own fields.
-- The test runs source, pipeline, and sender against the body in `TestClient`, capturing every
-  logger at `DEBUG`, stdout, and stderr, with valid and with rejected records. It fails if a
-  canary appears in a request the sender posted, in the catalog's state or a read endpoint, or
-  in the captured output. A kind registered without a canary fixture fails a test.
+  nulls stay, since they cannot be made unique. Keys stay.
+- `WIRE_FORMS` holds one wire form per kind: it writes records as that kind reads them and
+  returns the value of the kind's location env var. `replay` writes a `.json` list, one `.json`
+  file per record, and a `.jsonl` file that also holds broken lines. Each kind's test plants
+  every other field too: the rest of the record, DynamoDB keys, SNS attributes, a capture's
+  `url`, `headers`, and `error`, and an S3 key's order id. Envelope values get valid unique ids
+  (`envelope_id`), names (`envelope_name`), and timestamps (`envelope_timestamp`), and must
+  appear only in their own fields: `observation_id`, `work_id`, `correlation_id`,
+  `occurred_at`, and `channel.name`. The envelope values of a rejected record (`rejected`) must
+  appear nowhere.
+- The test runs source, pipeline, and sender against the body's app through
+  `httpx.ASGITransport`, capturing every logger at `DEBUG`, stdout, and stderr, with valid,
+  rejected, undecodable, and duplicate records. It fails if a canary appears in a request the
+  sender posted, in the catalog's state or `/streams` (where only names may appear, in channel
+  keys), or in the captured output. A kind in `READERS` without a wire form fails a test.
 
 ## Migration
 
 `dedupe_key` is removed; a file that still has it fails to load with a message naming
 `envelope.event_id`. Step 1.2 made `id` required ([observations.md](observations.md#migration));
-step 1.3 adds the rest. `_template.yml` declares one `kinesis` source in the new form, and
-`.env.example` gains `FIRE_BODY_URL` and every env var below. Locally they name
+step 1.3 added the rest: every kind's keys, `direction`, and `envelope`. `_template.yml`
+declares one `kinesis` source in the new form, `config/systems/omg.yml` holds the listing
+below, and `.env.example` gained `FIRE_BODY_URL` and every env var below. Locally they name
 `omg-dev-domain-events`, `omg-dev-order_domain_events`, `rx-updates`,
 `omg-carrier-events-topic-dev`, `omg-financials-topic-dev`, and
 `order-management-gateway-transmission-data-dev` ([dev/omg/README.md](../../dev/omg/README.md)).
@@ -295,6 +359,13 @@ OMG dev on AWS, read only, by hand. Each step runs the canary harness for its ki
   retry on `401`), unsent counts, backpressure, exit codes. L1: OMG's four `WorkUnit` samples,
   as fixtures and from `OMG_REPO` when set, give four `event:internal:<event_type>:payload`
   channels of one sample each. Integration: a second replay into the body adds only duplicates.
+  The tests: `tests/unit/test_envelope.py`, `test_record_pipeline.py`, `test_replay_source.py`,
+  `test_tentacle_sender.py`, `test_tentacle_runner.py`, `test_fire_config.py`, and the source
+  cases of `test_system_config.py`; `tests/integration/test_tentacle_replay.py` (L1, plus an
+  `omg_local` case that replays OMG's whole `scripts/test_payloads/` and checks the fixtures
+  still give its fingerprints) and `test_tentacle_canary.py`. The fixtures in
+  `tests/fixtures/omg/test_payloads/` are OMG's synthetic samples, copied unchanged at OMG
+  commit `d00569da3`.
 - **1.7.** L0: each layout's keys, with no order id in a channel name, `work_id`, or
   `observation_id`; pairing; `status_code: null`; `no_layout`. L1: capture files per layout.
   L2: `make test-oracle-publisher` and `make test-fulfillment-processor` give Oracle channels.

@@ -6,7 +6,9 @@ LocalStack, driven by its own `make test-*` targets and payloads, while the body
 tentacle run on the host. Nothing in the OMG repository changes: FIRE adds one compose override,
 passed with an extra `-f`, and its own collector config.
 
-**Status: planned.** Roadmap steps 1.4, 1.6 to 1.8, 1.10, and 2.6 add the files and commands below; until then only the OMG stack and the body run.
+**Status: partly planned.** The body runs, and so does the tentacle with its `replay` source
+(step 1.3). Roadmap steps 1.4, 1.6 to 1.8, 1.10, and 2.6 add the other files and commands
+below.
 
 Related: [ingest spec](../../docs/specs/ingest-drift-and-feedback.md),
 [tentacle](../../docs/specs/tentacle.md), [HTTP and span capture](../../docs/specs/http-and-span-capture.md),
@@ -140,8 +142,22 @@ make run 2>&1 | tee /tmp/fire-body.log
 curl -s http://127.0.0.1:8000/health   # in another terminal: {"status":"ok"}
 ```
 
-Tentacle (step 1.3; each source works once its step lands). Variable names other than
-`OMG_MANIFEST_PATH`, `OMG_REPLAY_PATH`, and `OMG_EVENTS_STREAM` are proposals the step fixes.
+Tentacle (step 1.3; each source works once its step lands). It sends to `FIRE_BODY_URL`
+(`http://127.0.0.1:8000` in `.env.example`) with `FIRE_API_TOKEN`. Sources whose variable is
+unset, or whose kind has no reader yet, are skipped with a log line. The source variables are
+fixed in `config/systems/omg.yml`; `OMG_API_UPSTREAM` is a proposal step 1.6 fixes.
+
+The replay alone needs neither OMG's stack nor AWS. It reads OMG's `WorkUnit` samples, logs
+`rejected=missing_event_id:<n>` for the API bodies in the same directory, and exits `0` once
+everything is sent; `/streams` then lists four `event:internal:…:payload` channels:
+
+```bash
+cd "$FIRE_REPO"
+OMG_REPLAY_PATH="$OMG_REPO/scripts/test_payloads" \
+  uv run python -m fire.apps.tentacle --system omg --source work-unit-samples
+```
+
+Every source at once, for the later steps:
 
 ```bash
 cd "$FIRE_REPO"
@@ -150,6 +166,10 @@ export OMG_REPLAY_PATH="$OMG_REPO/scripts/test_payloads"   # 1.3; non-WorkUnit f
 export OMG_API_UPSTREAM=http://localhost:8020               # 1.6; the proxy listens on :8021
 export OMG_TRANSMISSION_BUCKET=order-management-gateway-transmission-data-dev   # 1.7
 export OMG_EVENTS_STREAM=omg-dev-domain-events              # 1.8; needs KINESIS_ENABLED=true
+export OMG_RX_UPDATES_STREAM=rx-updates                     # 1.8; needs KINESIS_ENABLED=true
+export OMG_EVENTS_TABLE=omg-dev-order_domain_events         # 1.8
+export OMG_CARRIER_EVENTS_TOPIC=omg-carrier-events-topic-dev     # 1.8
+export OMG_FINANCIALS_EVENTS_TOPIC=omg-financials-topic-dev      # 1.8
 export AWS_ENDPOINT_URL=http://localhost:4566 AWS_REGION=us-east-1 \
   AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test         # 1.7, 1.8: LocalStack
 uv run python -m fire.apps.tentacle --system omg 2>&1 | tee /tmp/fire-tentacle.log

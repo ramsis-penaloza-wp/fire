@@ -16,8 +16,11 @@ Model: `SystemConfig` in `fire/apps/config.py`. Contract:
 - Declare decisions only: Slack target, manifest location, sources, policy exceptions, and
   sampling. Never list events, processors, or services; discovery reads them from the manifest.
 - `notify.slack.channel_id` is a channel id (`C…` or `G…`), never a `#name`.
-- Paths and stream names go through env vars (`path_env`, `stream_env`). Add each new env var
-  to `.env.example`.
+- Paths and resource names go through env vars (`path_env`, `stream_env`, `table_env`,
+  `topic_env`, `bucket_env`). Add each new env var to `.env.example`.
+- Each source declares its `kind`; event-carrying kinds also declare `direction` and an
+  `envelope` of dotted paths (docs/specs/tentacle.md#envelope). `dedupe_key` is gone; use
+  `envelope.event_id`.
 - `policy.critical` and `policy.ignore` hold exceptions, not full lists. Each name must be
   declared by the manifest or observed, or the coverage audit reports it.
 

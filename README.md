@@ -115,6 +115,9 @@ The engine computes a shape fingerprint when a shape arrives without one, valida
 `config/systems/*.yml` at startup, and discovers each system's inventory from its
 manifest (`event_chains_graph` format) for the coverage audit. OMG is the first
 watched system (`config/systems/omg.yml`; set `OMG_MANIFEST_PATH` to its event graph).
+The **tentacle** (`fire.apps.tentacle`) reads a system's declared sources, turns each payload
+into a shape and a fingerprint, and sends only those to the body's `POST /v0/observations`;
+today it reads `replay` sources (`docs/specs/tentacle.md`).
 Agent rules for this repo live in `.cursor/rules/`.
 
 Next: Laya/Jev System One adapter, OpenAI-compat Narrator, Slack notifier,
@@ -137,6 +140,14 @@ make run                # local engine on :8000
 
 ```bash
 uv run python -m fire.apps.incident_engine
+```
+
+With the body running, the tentacle sends to `FIRE_BODY_URL` with `FIRE_API_TOKEN`; for
+example, OMG's `WorkUnit` samples (`dev/omg/README.md`):
+
+```bash
+OMG_REPLAY_PATH=/path/to/order-management-gateway/scripts/test_payloads \
+  uv run python -m fire.apps.tentacle --system omg --source work-unit-samples
 ```
 
 CI runs the same format check, lint, and tests on every pull request.
