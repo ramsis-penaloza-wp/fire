@@ -20,6 +20,7 @@ from pydantic import (
 
 from fire.core.domain.baseline import BaselineStatus
 from fire.core.domain.dossier import Shape, ShapeFingerprint
+from fire.core.domain.drift import DriftSignal
 
 MAX_STR_LENGTH = 256
 
@@ -228,7 +229,8 @@ class StreamSummary(BaseModel):
     """One stream key of a system, `(source, channel)`: its baseline and the fingerprints seen.
 
     `samples` counts the observations folded into the baseline; `status` is `warm` once it
-    reaches the system's `drift.min_samples`.
+    reaches the system's `drift.min_samples`. `drift` holds the stream's open drift signals,
+    sorted by `first_seen`, then `schema_hash`.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -238,6 +240,7 @@ class StreamSummary(BaseModel):
     status: BaselineStatus
     samples: int = Field(ge=0)
     fingerprints: list[FingerprintSummary] = Field(min_length=1)
+    drift: list[DriftSignal] = Field(default_factory=list)
 
     @property
     def key(self) -> str:
