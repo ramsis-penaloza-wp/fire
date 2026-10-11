@@ -1,0 +1,120 @@
+{
+  "adminId": 1001,
+  "adminName": "fixture-admin-name",
+  "checkoutId": "fixture-checkout-id",
+  "customer": {
+    "email": "fixture.customer@example.com",
+    "firstName": "fixture-first-name",
+    "id": "fixture-customer-id",
+    "lastName": "fixture-last-name",
+    "origin": "web_store",
+    "telephone": "",
+    "wantsMarketingEmails": true,
+    "wantsMarketingSms": true,
+    "wantsTransactionalEmails": true,
+    "wantsTransactionalSms": true
+  },
+  "items": [
+    {
+      "amounts": {
+        "adjustmentAmount": 0,
+        "amount": 9500,
+        "benefitAmount": 0,
+        "copayAmount": 0,
+        "currency": "USD",
+        "discountAmount": 0,
+        "insuranceAmount": 0,
+        "postTaxAdjustmentAmount": 0,
+        "preTaxAdjustmentAmount": 0,
+        "promotionAmount": 0,
+        "subtotal": 9500,
+        "tax": 950,
+        "total": 10450
+      },
+      "configureToOrder": {
+        "currency": "USD",
+        "framePrice": "95",
+        "id": "2442",
+        "lensConfiguration": [
+          {
+            "optionClassId": "RX_TYPE",
+            "optionId": "NON_RX",
+            "description": "Non-Rx",
+            "price": "0"
+          },
+          {
+            "optionClassId": "BASE_LENS",
+            "optionId": "GREY",
+            "description": "Grey Sun",
+            "price": "0"
+          }
+        ],
+        "lensId": "1780494",
+        "modelVersion": "glasses-2026-22-04-non-rx-tints",
+        "price": "95"
+      },
+      "frame": {
+        "colorVariantId": "brimmer-sun-sbf-black-walnut",
+        "measurement": { "method": "digital" }
+      },
+      "id": "fixture-item-id",
+      "productId": "1791793",
+      "productName": "Brimmer",
+      "quantity": 1,
+      "requestId": "fixture-request-id",
+      "type": "Frame"
+    }
+  ],
+  "locale": "US",
+  "origin": "Online",
+  "partyId": 1,
+  "payments": [
+    {
+      "amount": 10450,
+      "ccExpiresMonth": "fixture-cc-expires-month",
+      "ccExpiresYear": "fixture-cc-expires-year",
+      "ccId": "fixture-cc-id",
+      "ccLastFour": "fixture-cc-last-four",
+      "ccType": "visa",
+      "currency": "USD",
+      "entryType": "savedCard",
+      "id": "00000000-0000-4000-8000-000000000001",
+      "type": "saved_credit_card"
+    }
+  ],
+  "referenceOrderId": "fixture-reference-order-id",
+  "referenceSystem": "checkout",
+  "shippingAddress": {
+    "countryCode": "US",
+    "extendedAddress": "fixture-extended-address",
+    "firstName": "fixture-first-name",
+    "id": 2002,
+    "lastName": "fixture-last-name",
+    "locality": "fixture-locality",
+    "postalCode": "fixture-postal-code",
+    "region": "AL",
+    "residential": true,
+    "streetAddress": "fixture-street-address"
+  },
+  "shippingMethod": { "method": "Standard Shipping", "productId": "" },
+  "timezone": "",
+  "totals": {
+    "adjustmentsTotal": 0,
+    "cashDueTotal": 0,
+    "cashTotal": 0,
+    "copayTotal": 0,
+    "creditMemoTotal": 0,
+    "currency": "USD",
+    "discountTotal": 0,
+    "giftCardTotal": 0,
+    "insuranceTotal": 0,
+    "postTaxAdjustmentTotal": 0,
+    "promotionsTotal": 0,
+    "shippingTotal": 0,
+    "subTotal": 9500,
+    "taxTotal": 950,
+    "totalAmount": 10450
+  },
+  "userId": "fixture-user-id",
+  "userIdType": "customer_id"
+}

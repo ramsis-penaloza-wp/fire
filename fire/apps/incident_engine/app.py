@@ -165,6 +165,7 @@ async def streams(
                 "fingerprints": [
                     fingerprint.model_dump(mode="json") for fingerprint in stream.fingerprints
                 ],
+                "drift": [signal.model_dump(mode="json") for signal in stream.drift],
             }
             for stream in container.catalog.streams(system)
         ],
