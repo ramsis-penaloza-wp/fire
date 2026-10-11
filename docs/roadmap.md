@@ -4,8 +4,8 @@ The order of work for [ingest-drift-and-feedback.md](specs/ingest-drift-and-feed
 (the spec). The spec says what each part must do. This roadmap cuts it into steps, one pull
 request each, and says for every step what must work, how it is tested, and against what.
 
-Phase 0 is done (repo rules and `config/systems/omg.yml`), and so are steps 1.1, 1.2, and 1.3.
-Phases 1 to 4 keep the spec's numbering.
+Phase 0 is done (repo rules and `config/systems/omg.yml`), and so are steps 1.1, 1.2, 1.3,
+and 2.1. Phases 1 to 4 keep the spec's numbering.
 
 **Scope added here.** The tentacle intercepts everything that enters and leaves OMG, not only
 Kinesis domain events: inbound HTTP, inbound external events, internal domain events, outbound

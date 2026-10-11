@@ -12,7 +12,7 @@ and do not apply here.
 
 | Path | What lives there |
 |---|---|
-| `fire/core/domain/` | Pydantic models: `dossier` (`Shape`, `ShapeField`, `ValueType`, `ShapeFingerprint`, `ProcessPath`, `EvidenceFragment`, `Dossier`), `decision` (`Possibility`, `Decision`), `incident`, `narration`, `origin`, `inventory` (`SystemInventory`, `CoverageReport`), `observation` (`Channel`, `ShapeObservation`, `SpanObservation`, `SpanLink`, `StreamSummary`, `FingerprintSummary`), `ingest` (`IngestReport`, `IngestCounts`, `Rejection`, `RejectionReason`), `envelope` (`Envelope`, `ValuePath`, `TimestampPath`, `PayloadPath`) |
+| `fire/core/domain/` | Pydantic models, and the `Baseline` dataclass: `dossier` (`Shape`, `ShapeField`, `ValueType`, `ShapeFingerprint`, `ProcessPath`, `EvidenceFragment`, `Dossier`), `decision` (`Possibility`, `Decision`), `incident`, `narration`, `origin`, `inventory` (`SystemInventory`, `CoverageReport`), `observation` (`Channel`, `ShapeObservation`, `SpanObservation`, `SpanLink`, `StreamSummary`, `FingerprintSummary`), `ingest` (`IngestReport`, `IngestCounts`, `Rejection`, `RejectionReason`), `envelope` (`Envelope`, `ValuePath`, `TimestampPath`, `PayloadPath`), `baseline` (`DriftPolicy`, `BaselineStatus`, `Baseline`) |
 | `fire/core/ports/` | Protocols: `Reasoner`, `Narrator`, `Notifier`, `ObservationCatalog`, `ShapeGeneralizer`, `ShapeFingerprinter`, `ManifestParser`, `RecordSource` (with `RawRecord`, `StartPosition`) |
 | `fire/core/services/` | `DiagnosisService` (reasoner, then narrator, then notifier), `IngestService` (checks and stores observations), `RecordPipeline` (raw record to `ShapeObservation` or a reason code), and `audit_coverage` |
 | `fire/adapters/shapes/` | `FlatStarShapeGeneralizer` (JSON to `Shape`), `Sha256ShapeFingerprinter` |
@@ -43,7 +43,7 @@ and do not apply here.
 | `shape-generalizer.md` | `adapters/shapes/flat_star.py` |
 | `system-config-and-discovery.md` | `apps/config.py`, `apps/discovery.py`, `inventory`, `coverage`, `adapters/manifests/` |
 | `observations.md` | `core/domain/observation.py`, `core/domain/ingest.py`, `core/services/ingest.py`, `ObservationCatalog` and its memory adapter, the ingest and streams endpoints |
-| `ingest-drift-and-feedback.md` | Proposal: tentacle, observations, drift, triggers, feedback; steps in `docs/roadmap.md` |
+| `ingest-drift-and-feedback.md` | Its Baseline section: `core/domain/baseline.py` and the catalog's baselines. The rest is a proposal: drift, triggers, feedback; steps in `docs/roadmap.md` |
 | `tentacle.md` | `apps/tentacle/`, `core/domain/envelope.py`, `core/ports/record_source.py`, `core/services/record_pipeline.py`, `adapters/sources/`, source kinds in `apps/config.py`, the canary harness; readers other than `replay` are a proposal |
 | `http-and-span-capture.md`, `flows-and-paths.md` | Proposals: span and HTTP capture, flows and paths |
 
