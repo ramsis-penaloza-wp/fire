@@ -36,12 +36,15 @@ def test_template_is_a_valid_system_config() -> None:
     config = SystemConfig.model_validate(yaml.safe_load(TEMPLATE.read_text()))
     assert config.notify.slack.channel_id == "C0123456789"
     assert config.discovery.manifest is not None
+    assert config.sources[0].id == "domain-events"
     assert config.sources[0].dedupe_key == "work_unit_id"
 
 
 @pytest.mark.unit
 def test_repo_system_configs_are_valid() -> None:
-    assert "omg" in load_system_configs(SYSTEMS)
+    configs = load_system_configs(SYSTEMS)
+    assert "omg" in configs
+    assert configs["omg"].source_ids() == {"domain-events"}
 
 
 @pytest.mark.unit
@@ -107,11 +110,64 @@ def test_sample_rate_is_in_zero_one(sample_rate: float) -> None:
         SystemConfig.model_validate(_minimal(fingerprinting={"sample_rate": sample_rate}))
 
 
+def _source(**overrides: Any) -> dict[str, Any]:
+    source: dict[str, Any] = {
+        "id": "events",
+        "kind": "kinesis",
+        "stream_env": "S",
+        "regions": ["us-east-1"],
+    }
+    source.update(overrides)
+    return source
+
+
+def _source_error_locs(*sources: dict[str, Any]) -> list[tuple[str | int, ...]]:
+    with pytest.raises(ValidationError) as caught:
+        SystemConfig.model_validate(_minimal(sources=list(sources)))
+    return [error["loc"] for error in caught.value.errors()]
+
+
 @pytest.mark.unit
 def test_kinesis_source_needs_a_region() -> None:
-    source = {"kind": "kinesis", "stream_env": "S", "regions": []}
-    with pytest.raises(ValidationError):
-        SystemConfig.model_validate(_minimal(sources=[source]))
+    assert _source_error_locs(_source(regions=[])) == [("sources", 0, "regions")]
+
+
+@pytest.mark.unit
+def test_source_id_is_required() -> None:
+    source = _source()
+    del source["id"]
+    assert _source_error_locs(source) == [("sources", 0, "id")]
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("source_id", ["domain-events", "rx_updates", "0", "a1"])
+def test_source_id_accepts_slugs(source_id: str) -> None:
+    config = SystemConfig.model_validate(_minimal(sources=[_source(id=source_id)]))
+    assert config.source_ids() == {source_id}
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "source_id",
+    ["", "-events", "_events", "Events", "domain events", "domain.events", "events/1"],
+    ids=["empty", "leading-dash", "leading-underscore", "uppercase", "space", "dot", "slash"],
+)
+def test_source_id_rejects_non_slugs(source_id: str) -> None:
+    assert _source_error_locs(_source(id=source_id)) == [("sources", 0, "id")]
+
+
+@pytest.mark.unit
+def test_source_ids_are_unique_within_a_system() -> None:
+    sources = [_source(id="b"), _source(id="a"), _source(id="b"), _source(id="a")]
+    with pytest.raises(ValidationError, match="duplicate source ids: a, b"):
+        SystemConfig.model_validate(_minimal(sources=sources))
+
+
+@pytest.mark.unit
+def test_source_ids_may_repeat_across_systems() -> None:
+    first = SystemConfig.model_validate(_minimal(sources=[_source()]))
+    second = SystemConfig.model_validate(_minimal(system="other", sources=[_source()]))
+    assert first.source_ids() == second.source_ids() == {"events"}
 
 
 @pytest.mark.unit

@@ -21,7 +21,8 @@ discovery:
 sources:
   # kinesis-publisher runs in every region, so the same DomainEvent can appear in both
   # streams. Its `id` is the work unit's work_unit_id.
-  - kind: kinesis
+  - id: domain-events
+    kind: kinesis
     stream_env: OMG_EVENTS_STREAM
     regions: [us-east-1, us-west-2]
     dedupe_key: id

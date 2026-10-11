@@ -13,10 +13,12 @@ from fire.core.domain.observation import (
     ChannelDirection,
     ChannelKind,
     ChannelPart,
+    FingerprintSummary,
     ShapeObservation,
     SpanLink,
     SpanObservation,
     StatusClass,
+    StreamSummary,
 )
 
 TRACE_ID = "4bf92f3577b34da6a3ce929d0e0e4736"
@@ -255,7 +257,10 @@ def _leaf_types(annotation: Any) -> Iterator[Any]:
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize("model", [Channel, ShapeObservation, SpanLink, SpanObservation])
+@pytest.mark.parametrize(
+    "model",
+    [Channel, ShapeObservation, SpanLink, SpanObservation, FingerprintSummary, StreamSummary],
+)
 def test_observation_models_have_no_open_types(model: type[BaseModel]) -> None:
     for name, field in model.model_fields.items():
         leaves = list(_leaf_types(field.annotation))

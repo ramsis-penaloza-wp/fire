@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from fire.adapters.manifests.event_chains_graph import EventChainsGraphParser
+from fire.adapters.memory.observation_catalog import MemoryObservationCatalog
 from fire.adapters.narrators.template import TemplateNarrator
 from fire.adapters.notifiers.console import ConsoleNotifier
 from fire.adapters.reasoners.echo import EchoReasoner
@@ -13,8 +14,10 @@ from fire.adapters.shapes.sha256 import Sha256ShapeFingerprinter
 from fire.apps.config import FireConfig, SystemConfig, load_fire_config, load_system_configs
 from fire.apps.discovery import Discovery, check_manifest_kinds, discover
 from fire.core.ports.manifest_parser import ManifestParser
+from fire.core.ports.observation_catalog import ObservationCatalog
 from fire.core.ports.shape_fingerprinter import ShapeFingerprinter
 from fire.core.services.diagnosis import DiagnosisService
+from fire.core.services.ingest import IngestService
 
 DEFAULT_CONFIG = Path(__file__).resolve().parents[3] / "config" / "fire.yml"
 
@@ -24,6 +27,8 @@ class Container:
     config: FireConfig
     diagnosis: DiagnosisService
     fingerprinter: ShapeFingerprinter
+    catalog: ObservationCatalog
+    ingest: IngestService
     systems: dict[str, SystemConfig] = field(default_factory=dict)
     discoveries: dict[str, Discovery] = field(default_factory=dict)
 
@@ -62,10 +67,15 @@ def build_container(config_path: Path | None = None) -> Container:
         narrator=TemplateNarrator(),
         notifier=ConsoleNotifier(),
     )
+    fingerprinter = Sha256ShapeFingerprinter()
+    catalog = MemoryObservationCatalog()
+    sources = {name: system.source_ids() for name, system in systems.items()}
     return Container(
         config=config,
         diagnosis=diagnosis,
-        fingerprinter=Sha256ShapeFingerprinter(),
+        fingerprinter=fingerprinter,
+        catalog=catalog,
+        ingest=IngestService(catalog, fingerprinter, sources),
         systems=systems,
         discoveries={name: discover(system, parsers) for name, system in systems.items()},
     )

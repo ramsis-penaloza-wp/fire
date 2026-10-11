@@ -18,7 +18,8 @@ discovery:
 
 # Where the tentacle reads from (not consumed yet).
 sources:
-  - kind: kinesis
+  - id: domain-events                # the observations' `source`; unique within the system
+    kind: kinesis
     stream_env: EXAMPLE_EVENTS_STREAM
     regions: [us-east-1, us-west-2]
     dedupe_key: work_unit_id         # same event published in several regions

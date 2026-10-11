@@ -210,3 +210,32 @@ class SpanObservation(BaseModel):
     def dedupe_key(self) -> tuple[str, str, str]:
         """`(system, trace_id, span_id)`: one span sent by two sources is one observation."""
         return (self.system, self.trace_id, self.span_id)
+
+
+class FingerprintSummary(BaseModel):
+    """One fingerprint of a stream: how many observations carried it, and when they were read."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_hash: str
+    observations: int = Field(ge=1)
+    first_observed_at: AwareDatetime
+    last_observed_at: AwareDatetime
+
+
+class StreamSummary(BaseModel):
+    """One stream key of a system, `(source, channel)`, and the fingerprints seen on it."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    source: BoundedStr
+    channel: Channel
+    fingerprints: list[FingerprintSummary] = Field(min_length=1)
+
+    @property
+    def key(self) -> str:
+        return self.channel.key
+
+    @property
+    def observations(self) -> int:
+        return sum(fingerprint.observations for fingerprint in self.fingerprints)

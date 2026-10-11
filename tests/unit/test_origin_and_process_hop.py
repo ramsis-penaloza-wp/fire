@@ -1,23 +1,12 @@
-"""Origin, ShapeRecord, and by-reference ProcessHop contracts."""
+"""Origin and by-reference ProcessHop contracts."""
 
 from __future__ import annotations
-
-from typing import is_protocol
 
 import pytest
 from pydantic import ValidationError
 
-from fire.core.domain.dossier import (
-    ProcessHop,
-    Shape,
-    ShapeField,
-    ShapeFingerprint,
-    ShapeRecord,
-    ValueType,
-)
+from fire.core.domain.dossier import ProcessHop
 from fire.core.domain.origin import Origin, OriginKind
-from fire.core.ports.origin_registry import OriginRegistry
-from fire.core.ports.shape_catalog import ShapeCatalog
 
 
 @pytest.mark.unit
@@ -31,21 +20,6 @@ def test_origin_has_no_form_fields() -> None:
     assert set(dumped) == {"origin_id", "kind", "endpoint_ref"}
     assert "fields" not in dumped
     assert "shape" not in dumped
-
-
-@pytest.mark.unit
-def test_shape_record_associates_without_db_fields() -> None:
-    record = ShapeRecord(
-        project_id="proj-a",
-        origin_id="orig-http-orders",
-        shape=Shape(fields=[ShapeField(path="order.id", value_type=ValueType.STRING)]),
-        fingerprint=ShapeFingerprint(schema_hash="abc", normalized_paths=["order.id"]),
-    )
-    dumped = record.model_dump()
-    assert dumped["project_id"] == "proj-a"
-    assert dumped["origin_id"] == "orig-http-orders"
-    assert "id" not in dumped  # not a persistence row
-    assert "created_at" not in dumped
 
 
 @pytest.mark.unit
@@ -112,12 +86,6 @@ def test_process_hop_requires_a_ref(fields: dict[str, str]) -> None:
 def test_process_hop_cannot_be_node_and_edge(fields: dict[str, str]) -> None:
     with pytest.raises(ValidationError, match="node"):
         ProcessHop(**fields)
-
-
-@pytest.mark.unit
-def test_ports_are_protocols_only() -> None:
-    assert is_protocol(OriginRegistry)
-    assert is_protocol(ShapeCatalog)
 
 
 @pytest.mark.unit
