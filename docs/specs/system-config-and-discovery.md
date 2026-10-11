@@ -60,11 +60,15 @@ channel details**, at the bottom of the **About** tab.
 
 ### Sources
 
-The tentacle reads `sources`; the engine only validates them for now.
+The tentacle reads `sources`. The engine validates them and accepts observations only from a
+declared source ([observations.md](observations.md#ingest-endpoint)).
+
+Every source has an `id`: required, `^[a-z0-9][a-z0-9_-]*$`, and unique within the system. It
+is the `source` of every observation read from it. Two systems may reuse an id.
 
 | `kind` | Fields |
 |--------|--------|
-| `kinesis` | `stream_env` (env var holding the stream name), `regions` (one or more), `dedupe_key` (optional) |
+| `kinesis` | `id`, `stream_env` (env var holding the stream name), `regions` (one or more), `dedupe_key` (optional) |
 
 `dedupe_key` names the record field that identifies one event across regions. A system that
 publishes the same event in several regions needs it, or every count doubles. In OMG it is

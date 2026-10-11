@@ -223,7 +223,7 @@ counts. Never values, URLs whose path or query carries values, headers, or bodie
 ## Migration
 
 `dedupe_key` is removed; a file that still has it fails to load with a message naming
-`envelope.event_id`. Step 1.2 makes `id` required ([observations.md](observations.md#migration));
+`envelope.event_id`. Step 1.2 made `id` required ([observations.md](observations.md#migration));
 step 1.3 adds the rest. `_template.yml` declares one `kinesis` source in the new form, and
 `.env.example` gains `FIRE_BODY_URL` and every env var below. Locally they name
 `omg-dev-domain-events`, `omg-dev-order_domain_events`, `rx-updates`,

@@ -8,11 +8,14 @@ capture in [http-and-span-capture.md](http-and-span-capture.md), flows and paths
 [flows-and-paths.md](flows-and-paths.md), and baselines and drift in
 [ingest-drift-and-feedback.md](ingest-drift-and-feedback.md#phase-2-drift).
 
-**Status:** [Channel](#channel), [ShapeObservation](#shapeobservation),
-[SpanObservation](#spanobservation), [Stream key and deduplication](#stream-key-and-deduplication),
-and the model rules of [Privacy invariants](#privacy-invariants) are the contract of
-`fire/core/domain/observation.py` (roadmap step 1.1). The ingest endpoint, the catalog, and
-the streams endpoint are a proposal that step 1.2 implements.
+**Status:** the contract of the shipped code. [Channel](#channel),
+[ShapeObservation](#shapeobservation), [SpanObservation](#spanobservation),
+[Stream key and deduplication](#stream-key-and-deduplication), and the model rules of
+[Privacy invariants](#privacy-invariants) are `fire/core/domain/observation.py` (roadmap step
+1.1). The [ingest endpoint](#ingest-endpoint), the [catalog](#observationcatalog), and the
+[streams endpoint](#streams-endpoint) are step 1.2: `fire/core/services/ingest.py`,
+`fire/core/ports/observation_catalog.py`, `fire/adapters/memory/observation_catalog.py`, and
+`fire/apps/incident_engine/app.py`.
 
 ## Channel
 
@@ -125,7 +128,9 @@ does `SpanObservation.dedupe_key`. Like `Channel.key`, they are properties, not 
 - **The fingerprint adds nothing.** It must equal the recomputed one on every field, so
   `notes` cannot carry a value.
 - **Nothing is echoed.** A rejection names an index, a reason, and field locations. A `422`
-  lists each error's `loc` and `type`, never its `input`. Ingest logs carry counts only.
+  on any route, `/v0/diagnose` included, lists each error's `loc` and `type`, never its
+  `input`: `{"detail": [{"loc": ["body", "shapes"], "type": "list_type"}]}`. Ingest logs carry
+  counts only.
 
 ## Ingest endpoint
 
@@ -144,8 +149,10 @@ does `SpanObservation.dedupe_key`. Like `Channel.key`, they are properties, not 
 ```
 
 The token is checked before the body, with `/v0/diagnose`'s rules: missing or wrong is `401`,
-an unset `api.token_env` is `503`. A body that is not an object holding only `shapes` and
-`spans` lists is `422`. Otherwise the response is `202`, even when every item is rejected.
+an unset `api.token_env` is `503`. The body is read only after the token passes, so even
+malformed JSON from a caller without the token is `401`. A body that is not an object holding
+only `shapes` and `spans` lists is `422`. Otherwise the response is `202`, even when every item
+is rejected.
 
 Items are checked one by one, `shapes` first, each list in order. The first failing check
 decides:
@@ -164,6 +171,11 @@ fingerprint with its `ShapeFingerprinter` (`Sha256ShapeFingerprinter`) and compa
 dedupe key. A duplicate changes nothing, even when its shape differs: the first write wins. Two
 equal items in one batch give one `accepted` and one `duplicate`.
 
+`IngestService` (`fire/core/services/ingest.py`) runs the checks against the loaded systems'
+`sources[].id`; the response models (`IngestReport`, `IngestCounts`, `Rejection`,
+`RejectionReason`) are in `fire/core/domain/ingest.py`. Each batch logs one `INFO` line with
+the six counts and nothing else.
+
 ```json
 {"shapes": {"accepted": 41, "duplicate": 2,
             "rejected": [{"index": 7, "reason": "unknown_source"},
@@ -172,8 +184,8 @@ equal items in one batch give one `accepted` and one `duplicate`.
 ```
 
 `index` is the position in the item's own list; `fields`, only on `invalid`, lists dotted
-locations. Accepted items are in the catalog when the response returns, so the counts are
-final.
+locations, each once. An item that is not an object fails as a whole, so its `fields` is empty.
+Accepted items are in the catalog when the response returns, so the counts are final.
 
 ## ObservationCatalog
 
@@ -184,23 +196,32 @@ Port in `fire/core/ports/observation_catalog.py`; the first adapter is in memory
 |-----------|----------|
 | `add_shape(observation) -> bool` | Stores the observation unless its dedupe key is known; returns whether it did |
 | `add_span(observation) -> bool` | The same, keyed by `(system, trace_id, span_id)` |
-| `streams(system) -> list[StreamSummary]` | One summary per stream key of the system |
+| `streams(system) -> list[StreamSummary]` | One summary per stream key of the system, sorted as in [Streams endpoint](#streams-endpoint); empty for a system with no observations |
+
+The operations are synchronous. A `StreamSummary` holds `source`, `channel`, and
+`fingerprints`, each a `FingerprintSummary` (`schema_hash`, `observations`,
+`first_observed_at`, `last_observed_at`); `key` and `observations` (the sum over its
+fingerprints) are properties. Both models are in `fire/core/domain/observation.py` and reject
+unknown fields.
 
 Per stream key the catalog keeps the observation count and, per fingerprint, the `Shape`, its
-count, and the first and last `observed_at`. Per accepted shape it keeps an index entry: the
-dedupe key, the stream key, `schema_hash`, both timestamps, `region`, `trace_id`, `span_id`,
-`work_id`, and `correlation_id`. Spans are kept whole. Flows read spans and index entries
-([Shapes on flows](flows-and-paths.md#shapes-on-flows)); baselines fold per stream key
-([Baseline](ingest-drift-and-feedback.md#baseline)).
+count, and the earliest and latest `observed_at`, whatever the arrival order. Per accepted shape
+it keeps an index entry: the dedupe key, the stream key, `schema_hash`, both timestamps,
+`region`, `trace_id`, `span_id`, `work_id`, and `correlation_id`. Spans are kept whole. Flows
+read spans and index entries ([Shapes on flows](flows-and-paths.md#shapes-on-flows)); baselines
+fold per stream key ([Baseline](ingest-drift-and-feedback.md#baseline)). The port gains those
+reads with the steps that need them (1.9 and 2.1).
 
 Checking and storing a dedupe key is one atomic step, so concurrent tentacles, two regions, and
-resent batches store each observation once. The memory adapter keeps its dedupe index for the
-life of the process; a retention window comes with the SQLite adapter in step 3.1.
+resent batches store each observation once. `MemoryObservationCatalog` guards every operation
+with one lock and keeps its dedupe index for the life of the process; a retention window comes
+with the SQLite adapter in step 3.1.
 
 ## Streams endpoint
 
-`GET /v0/systems/{system}/streams` requires `X-FIRE-Token` (`401`, `503` as above). An unknown
-system is `404`; a known system with no observations has an empty `streams` list.
+`GET /v0/systems/{system}/streams` requires `X-FIRE-Token` (`401`, `503` as above, checked
+first). An unknown system is `404`; a known system with no observations has an empty `streams`
+list.
 
 ```json
 {"system": "omg", "streams": [{
@@ -233,14 +254,16 @@ sections are links here.
 | Observed event types for `audit_coverage` | Names of `kind: event` channels |
 | `ShapeCatalog`, `ShapeRecord`, `OriginRegistry` | `ObservationCatalog`; the other two are removed |
 
-Step 1.2 deletes `fire/core/ports/shape_catalog.py`, `fire/core/ports/origin_registry.py`,
+Step 1.2 deleted `fire/core/ports/shape_catalog.py`, `fire/core/ports/origin_registry.py`,
 `ShapeRecord`, their checks in `tests/unit/test_origin_and_process_hop.py`, the `ShapeRecord`
 sentence in [dossier-and-decision.md](dossier-and-decision.md), and the repo map's note on
-them. `Origin` stays. Step 1.2 also needs `sources[].id`, so it adds that field ahead of step
-1.3: required, unique within a system, and set in `omg.yml` and `_template.yml`.
+them. `Origin` stays. Step 1.2 also added `sources[].id` ahead of step 1.3: required,
+`^[a-z0-9][a-z0-9_-]*$`, unique within a system, and set in `omg.yml` and `_template.yml`.
 
 ## Tests
 
+Step 1.2's tests are `tests/unit/test_observation_catalog_memory.py`,
+`tests/unit/test_observation_ingest.py`, and `tests/integration/test_observations_api.py`.
 Integration tests use `TestClient` with config written to `tmp_path`.
 
 | Step | Level | Proves |

@@ -152,12 +152,16 @@ No fail-open “secret optional” mode outside an explicit local-dev override.
 - `GET /health` — liveness (unauthenticated).
 - `POST /v0/diagnose` — submit an incident (`X-FIRE-Token` required); `202` with an
   `incident_id`, diagnosis runs in the background.
+- `POST /v0/observations` — ingest shape and span observations (`X-FIRE-Token` required);
+  `202` with accepted, duplicate, and rejected counts per list
+  (`docs/specs/observations.md`).
+- `GET /v0/systems/{system}/streams` — observation and fingerprint counts per stream key
+  (`X-FIRE-Token` required).
 
 ### Planned
 
 - `POST /webhooks/alerts` — generic alert webhook; 202 + background pipeline.
 - `POST /webhooks/alerts/{source}` — vendor webhook (normalize + route).
-- `POST /ingest/{system}` — continuous-plane tap (shape fingerprints only).
 
 ## Hard boundaries
 
