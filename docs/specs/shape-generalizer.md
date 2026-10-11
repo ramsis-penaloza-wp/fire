@@ -25,6 +25,9 @@ One path can carry several fields, one per value type seen there. The list is so
 `(path, value_type)` in code-point order and never holds two fields with the same
 `(path, value_type)`.
 
+`Shape`, `ShapeField`, and `ShapeFingerprint` reject unknown fields, so a shape that arrives
+with a `value` key fails validation instead of losing the key silently.
+
 Serialized, a field looks like this:
 
 ```json

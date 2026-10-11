@@ -12,7 +12,7 @@ and do not apply here.
 
 | Path | What lives there |
 |---|---|
-| `fire/core/domain/` | Pydantic models: `dossier` (`Shape`, `ShapeField`, `ValueType`, `ShapeFingerprint`, `ProcessPath`, `EvidenceFragment`, `Dossier`), `decision` (`Possibility`, `Decision`), `incident`, `narration`, `origin`, `inventory` (`SystemInventory`, `CoverageReport`) |
+| `fire/core/domain/` | Pydantic models: `dossier` (`Shape`, `ShapeField`, `ValueType`, `ShapeFingerprint`, `ProcessPath`, `EvidenceFragment`, `Dossier`), `decision` (`Possibility`, `Decision`), `incident`, `narration`, `origin`, `inventory` (`SystemInventory`, `CoverageReport`), `observation` (`Channel`, `ShapeObservation`, `SpanObservation`, `SpanLink`) |
 | `fire/core/ports/` | Protocols: `Reasoner`, `Narrator`, `Notifier`, `ShapeGeneralizer`, `ShapeFingerprinter`, `ManifestParser`; `ShapeCatalog` and `OriginRegistry` have no adapter |
 | `fire/core/services/` | `DiagnosisService` (reasoner, then narrator, then notifier) and `audit_coverage` |
 | `fire/adapters/shapes/` | `FlatStarShapeGeneralizer` (JSON to `Shape`), `Sha256ShapeFingerprinter` |
@@ -25,6 +25,7 @@ and do not apply here.
 | `config/fire.yml` | Global: API token env var, reasoner, narrator, notifier, tier budgets |
 | `config/systems/` | One YAML per watched system; `_template.yml` is skipped. `omg.yml` is OMG, the first |
 | `tests/unit/` | Flat `test_<topic>.py` files |
+| `tests/conftest.py` | Skips `omg_local` tests unless `OMG_REPO` is set |
 
 ## Specs
 
@@ -35,7 +36,9 @@ and do not apply here.
 | `dossier-and-decision.md` | `core/domain/dossier.py`, `core/domain/decision.py` |
 | `shape-generalizer.md` | `adapters/shapes/flat_star.py` |
 | `system-config-and-discovery.md` | `apps/config.py`, `apps/discovery.py`, `inventory`, `coverage`, `adapters/manifests/` |
-| `ingest-drift-and-feedback.md` | Roadmap: tentacle, observations, drift, triggers, feedback |
+| `observations.md` | `core/domain/observation.py`; proposal: ingest endpoint, `ObservationCatalog`, streams endpoint |
+| `ingest-drift-and-feedback.md` | Proposal: tentacle, observations, drift, triggers, feedback; steps in `docs/roadmap.md` |
+| `tentacle.md`, `http-and-span-capture.md`, `flows-and-paths.md` | Proposals: the tentacle and its sources, span and HTTP capture, flows and paths |
 
 ## Dependency rule
 

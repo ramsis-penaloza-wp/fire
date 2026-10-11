@@ -53,7 +53,11 @@ class ShapeField(BaseModel):
     optional is true when the key may be absent: some object at the parent path lacks it.
     It is relative to that parent, so a field under an optional key is optional only when
     some object at its own parent path lacks it.
+
+    Unknown fields are rejected, so a `value` key fails instead of being dropped.
     """
+
+    model_config = ConfigDict(extra="forbid")
 
     path: str
     value_type: ValueType = ValueType.UNKNOWN
@@ -65,14 +69,21 @@ class Shape(BaseModel):
     """Reusable structure description — keys, types, cardinality, and optionality only.
 
     Produced by ShapeGeneralizer: flat paths with [*] for array elements, one field per
-    (path, value_type), sorted by that pair. Not a fingerprint.
+    (path, value_type), sorted by that pair. Not a fingerprint. Unknown fields are rejected.
     """
+
+    model_config = ConfigDict(extra="forbid")
 
     fields: list[ShapeField] = Field(default_factory=list)
 
 
 class ShapeFingerprint(BaseModel):
-    """Stable id for a Shape (schema_hash ± normalized paths). Not a generalizer."""
+    """Stable id for a Shape (schema_hash ± normalized paths). Not a generalizer.
+
+    Unknown fields are rejected.
+    """
+
+    model_config = ConfigDict(extra="forbid")
 
     schema_hash: str
     normalized_paths: list[str] = Field(default_factory=list)

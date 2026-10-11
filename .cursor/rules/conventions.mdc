@@ -45,8 +45,10 @@ Commit, push, or open a pull request only when asked. Repos of watched systems, 
 
 ## Tests and docs
 
-- Mark every test `@pytest.mark.unit`. `--strict-markers` is on, so register a new marker in
-  `pyproject.toml` before using it.
+- Mark every test in `tests/unit/` `@pytest.mark.unit` and every test in `tests/integration/`
+  `@pytest.mark.integration`. Tests that need OMG's local stack also get
+  `@pytest.mark.omg_local` and are skipped unless `OMG_REPO` is set. `--strict-markers` is on,
+  so register a new marker in `pyproject.toml` before using it.
 - New adapters, config keys, and behavior get tests. App tests set
   `app_module._container = build_container()` and wrap `app` in `TestClient`.
 - Tests never read files outside the repo: write fixtures to `tmp_path` and point env vars at them.
