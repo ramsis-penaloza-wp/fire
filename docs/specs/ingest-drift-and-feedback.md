@@ -1,10 +1,11 @@
 # Ingest, drift, and feedback
 
-**Status:** phase 0, [Baseline](#baseline) (roadmap step 2.1), and [Drift rules](#drift-rules)
-(step 2.2) are the contract of the shipped code. Phase 1 lives in the specs its sections link
-to, each with its own status; the rest of phases 2 to 4 is a proposal.
+**Status:** phase 0, [Baseline](#baseline) (roadmap step 2.1), [Drift rules](#drift-rules)
+(step 2.2), and [Drift incidents](#drift-incidents) for shape drift (step 2.4) are the contract
+of the shipped code; step 2.3 opens path drift incidents. Phase 1 lives in the specs its
+sections link to, each with its own status; the rest of phases 2 to 4 is a proposal.
 
-This is the route from today's engine, which only diagnoses what a caller posts to
+This is the route from the first engine, which only diagnosed what a caller posted to
 `POST /v0/diagnose`, to an engine that watches a system on its own, detects shape drift,
 diagnoses incidents, and learns from feedback. The order of work, with what each step must
 achieve and how it is tested, is in [docs/roadmap.md](../roadmap.md).
@@ -248,11 +249,14 @@ signal:
  "first_seen": "2026-10-11T16:30:21Z", "last_seen": "2026-10-11T16:32:00Z"}
 ```
 
-A signal notifies once. `IngestService` takes an `on_drift` hook (`DriftHook`), called with the
-observation that raised a signal and the signal, once per new signal, after the whole batch is
-counted, in batch order. A later occurrence calls nothing. Until step 2.4 replaces the hook
-with opening an incident ([Drift incidents](#drift-incidents)), the body wires `log_drift`
-(`fire/apps/incident_engine/wiring.py`), which logs one `INFO` line per new signal:
+A signal notifies once. `IngestService.ingest(shapes, spans, on_drift=None)` takes an optional
+hook (`DriftHook`), called with the observation that raised a signal and the signal, once per
+new signal, after the whole batch is counted, in batch order. A later occurrence and a rejected
+item call nothing. The hook is passed per call, not to the constructor, so the body's hook can
+schedule work on the request's background tasks. For each new signal, the hook of
+`POST /v0/observations` logs one `INFO` line with `log_drift`
+(`fire/apps/incident_engine/wiring.py`) and opens a drift incident
+([Drift incidents](#drift-incidents)):
 
 ```
 shape drift raised: system=<system> source=<source> stream=<channel key> fingerprint=<schema_hash> added=<n> type_changed=<n> removed=<n>
@@ -262,29 +266,140 @@ The line carries names and counts only, never paths, because a path can hold dat
 ([observations.md, open question 1](observations.md#open-questions)). The L1 scenario logs one
 line, with `added=0 type_changed=1 removed=1`.
 
+A hook call that raises does not stop the others or change the response. The batch is already
+stored, so a resend would count as duplicates and never raise those signals again. `ingest`
+logs one `ERROR` line with the exception's type and not its message, which may quote the shape,
+then calls the hook for the next signal:
+
+```
+drift hook failed: system=<system> source=<source> stream=<channel key> fingerprint=<schema_hash> error=<exception type>
+```
+
 `drift.min_samples` and `drift.required_ratio` are set per system ([Baseline](#baseline)).
 
 ### Drift incidents
 
-A shape drift signal opens an `Incident` with `trigger: shape_drift`, and a path drift signal
-one with `trigger: path_drift`. `Incident` gains a `trigger` field (`shape_drift`,
-`path_drift`, `incident_io`, `http_errors`, `manual`); `POST /v0/diagnose` becomes `manual`.
-The dossier carries these fragments:
+A new shape drift signal opens one incident. For each new signal, the hook of
+`POST /v0/observations` ([Drift rules](#drift-rules)) calls
+`DriftIncidentService.open_shape_drift(observation, signal)`
+(`fire/core/services/drift_incident.py`), which returns the incident and its dossier, and runs
+their diagnosis (reasoner, then narrator, then notifier) in a background task of the request.
+The response is still `202`, in the same format. A later occurrence of the signal opens
+nothing, so 100 drifted copies are one incident.
 
-| Collector | Data |
-|-----------|------|
-| `shape_drift` | Stream key, the diff (added, type_changed, removed paths), occurrences, first seen |
-| `path_drift` | Entry operation, rule, operation, occurrences, first seen; see [Path drift](flows-and-paths.md#path-drift) |
-| `baseline` | Samples, status, fingerprints known |
-| `coverage` | The system's `CoverageReport` from observed event types |
+`Incident` (`fire/core/domain/incident.py`) has a required `trigger`
+([Incident](dossier-and-decision.md#incident)): `shape_drift` here, `path_drift` from step 2.3,
+`http_errors` and `incident_io` from steps 3.3 and 3.4, and `manual` for `POST /v0/diagnose`.
+A shape drift incident:
 
-`EchoReasoner` builds one possibility per drift fragment. The notifier stays console for
-the demo.
+| Field | Value |
+|-------|-------|
+| `id` | A new uuid4 |
+| `system` | The observation's `system` |
+| `trigger` | `shape_drift` |
+| `service` | `None` |
+| `summary` | `Shape drift on <channel key>` |
+| `started_at` | The signal's `first_seen` |
+
+Its dossier holds the drifted observation's `shape` and `fingerprint`, an empty `process_path`,
+no `origin`, no `service`, and these fragments, in this order:
+
+| Collector | Quality | Summary | Data |
+|-----------|---------|---------|------|
+| `shape_drift` | `present` | `Shape drift on <channel key>: added=<n> type_changed=<n> removed=<n>` | `source`, `stream` (the channel key), `schema_hash`, `diff`, `occurrences`, `first_seen` |
+| `baseline` | `present` | `<status>: <samples> samples, <n> fingerprints known` | `source`, `stream`, `status`, `samples`, `fingerprints`, `observations`, `drift_signals` |
+| `baseline`, when the catalog has no summary of the stream | `missing` | `No baseline for this stream` | `source`, `stream` |
+| `coverage`, when discovery found an inventory | `present` | `<n> declared events unseen, <n> seen undeclared, <n> unknown references` | The `CoverageReport`: `system`, `declared_unseen`, `seen_undeclared`, `unknown_references` |
+| `coverage`, when discovery found none | `missing` | The discovery's `missing_reason`, such as `No manifest declared (observation only)` or `OMG_MANIFEST_PATH is not set` | Empty |
+| `coverage`, when the service has no scope for the system | `missing` | `No coverage scope for this system` | Empty |
+| `process_path` | `missing` | `No complete flow` | Empty |
+
+`shape_drift` holds the signal as the occurrence that raised it left it: `diff` is its
+`ShapeDiff` (`added`, `type_changed`, `removed`, as in [Drift rules](#drift-rules)),
+`occurrences` is `1`, and `first_seen` is in ISO 8601. Later occurrences show in `/streams`. In
+the L1 scenario:
+
+```json
+{"collector": "shape_drift", "quality": "present",
+ "summary": "Shape drift on http:inbound:POST /v1/orders/place_order:request: added=0 type_changed=1 removed=1",
+ "data": {"source": "api-proxy", "stream": "http:inbound:POST /v1/orders/place_order:request",
+  "schema_hash": "c47d…",
+  "diff": {"added": [],
+           "type_changed": [{"path": "referenceOrderId", "old": ["string"], "new": ["integer"]}],
+           "removed": [{"path": "timezone", "value_type": "string"}]},
+  "occurrences": 1, "first_seen": "2026-10-11T16:30:21Z"}}
+```
+
+`baseline` reads the stream's summary from the catalog's `streams(system)` when the incident
+opens, after the whole batch is counted. `status` is its `BaselineStatus`, `warm` on any stream
+that raises drift; `samples` counts its folded observations; `fingerprints` counts its folded
+fingerprints, the stream's fingerprints minus its drifted ones; `observations` counts every
+stored observation of the stream, drifted ones included; and `drift_signals` counts its open
+signals.
+
+`build_container` gives `DriftIncidentService` the catalog and one `CoverageScope` per loaded
+system (`fire/core/services/coverage.py`), built from the system's `Discovery` and `policy`:
+exactly one of `inventory` and `missing_reason`, plus `policy.critical` and `policy.ignore`.
+With an inventory, `coverage` runs `audit_coverage`
+([Coverage audit](system-config-and-discovery.md#coverage-audit)) with the system's observed
+event types: the names of its `kind: event` channels in the catalog, across its sources. `http`
+channels are not events and are left out.
+
+`process_path` is missing because flows come with step 1.9
+([Process path in the dossier](flows-and-paths.md#process-path-in-the-dossier)). Whether a
+shape drift incident should wait for its shape's flow is
+[flows-and-paths.md, open question 3](flows-and-paths.md#open-questions). Until then every
+shape drift dossier has a missing fragment, so its decision is `noul` at confidence `0.2`.
+
+`EchoReasoner` builds one possibility per `present` `shape_drift` or `path_drift` fragment, in
+fragment order, after the process path's hops and before `insufficient-evidence`;
+[EchoReasoner](dossier-and-decision.md#echoreasoner) defines every possibility, its label, and
+the confidence. A shape drift label names the channel and every change,
+`Shape drift on <channel key>: <changes>`, the changes joined by `; ` in the order added, type
+changed, removed.
+
+`ConsoleNotifier` prints a header line,
+`[fire] notify incident=<id> system=<system> trigger=<trigger>`, then the narration, to the
+`sys.stdout` current at publish time. The L1 scenario, with no manifest configured, prints one
+notification:
+
+```
+[fire] notify incident=<uuid> system=omg trigger=shape_drift
+*FIRE ENGINE* incident `<uuid>` (`omg`)
+Confidence: 20% — `noul` (do not treat as settled cause)
+Possibilities:
+• (50%) Shape drift on http:inbound:POST /v1/orders/place_order:request: referenceOrderId changed string -> integer; timezone (string) removed _[shape_drift]_
+• (50%) Insufficient evidence (MISSING fragments) _[coverage, process_path]_
+Shape hash: `c47d…`
+_Narrator: template stub (swap OpenAI-compat via FIRE_NARRATOR_*)._
+```
+
+The notification names the changed paths and their types, as `/streams` does; the `INFO` line
+names counts only ([Drift rules](#drift-rules)).
+
+`path_drift` is a `Trigger` value and `EchoReasoner` reads `path_drift` fragments
+([Path drift](flows-and-paths.md#path-drift)), but nothing opens a path drift incident yet. Step
+2.3 does, with one `path_drift` fragment per signal the flow fired and the flow's process path.
+
+Step 2.4's tests are `tests/unit/test_drift_incident.py`, `tests/unit/test_console_notifier.py`,
+cases in `tests/unit/test_echo_reasoner.py`, `tests/unit/test_observation_ingest.py`,
+`tests/unit/test_inventory_and_coverage.py`, `tests/unit/test_origin_and_process_hop.py`,
+`tests/unit/test_dossier.py`, `tests/unit/test_diagnose_with_origin.py`, and
+`tests/unit/test_shape_contracts.py`, and the integration test
+`tests/integration/test_drift_incidents.py`.
+
+| Step | Level | Proves |
+|------|-------|--------|
+| 2.4 | L0 | The incident is a `shape_drift` on the channel from the signal's `first_seen`; the dossier carries the drifted shape and the four fragments in order; `shape_drift` names the stream and its diff; `baseline` counts only the folded fingerprints of its own stream, and is missing for a stream the catalog does not hold; `coverage` audits the names of event channels only, honors `critical` and `ignore`, and is missing with the scope's reason or without a scope; `process_path` is missing; a `CoverageScope` rejects both or neither of `inventory` and `missing_reason` |
+| 2.4 | L0 | `EchoReasoner` builds one possibility per present drift fragment, after the hops, in fragment order; the shape drift label lists added, then type changed, then removed; the path drift label names the rule, the node, and the entry; malformed data falls back to the summary; a missing drift fragment counts only as missing evidence; a present drift fragment alone is evidence; the `unknown` label names the evidence that is absent; a shape drift with no flow is `noul` |
+| 2.4 | L0 | Each `ingest` call reports its own signals to its own hook; `ConsoleNotifier` names the incident, system, and trigger, and writes to the `sys.stdout` current at publish or to a given stream; `via` is accepted on edge hops, rejected on a node hop and as an unknown value, and survives a JSON round trip; `Dossier` takes `system` and rejects `project_id`; `Incident` names its `system` and requires a known `trigger`; `/v0/diagnose` rejects a system that is not loaded and a fingerprint that does not match its shape, and keeps a fingerprint sent without a shape |
+| 2.4 | Integration | A baseline batch and a drifted batch posted to `/v0/observations` give exactly one console notification naming the channel and the diff, and 99 more copies give no second one; the dossier holds the diff, the baseline, and the missing evidence; with a manifest, `coverage` audits the observed event types against it; no placeholder value reaches stdout, the logs, or a response; `/v0/diagnose` with `system` notifies once, as `manual` |
 
 ### Coverage and contract
 
-- `audit_coverage` runs with the catalog's observed event types per system, on each drift
-  incident and on `GET /v0/systems/{system}/coverage`.
+- `audit_coverage` runs with the catalog's observed event types per system. Since step 2.4 it
+  runs on each shape drift incident ([Drift incidents](#drift-incidents)); step 2.5 runs it on
+  `GET /v0/systems/{system}/coverage`.
 - Contract drift (optional for the demo): compare an observation's top-level payload keys
   with the manifest's declared fields. Casing differs, so the system YAML declares the wire
   casing (`discovery.manifest.wire_case: camel`). Only names are compared; Python type names
@@ -345,14 +460,16 @@ drift signals (steps 2.1 and 2.2). Both read endpoints require `X-FIRE-Token`.
 
 ## Changes to existing code
 
-| Today | Proposed |
-|-------|----------|
-| `project_id` on `Incident`, `Dossier`, `DiagnoseRequest` | `system`, validated against loaded systems, so the notifier can pick the Slack channel |
-| `sources[].dedupe_key` | `sources[].envelope`; new `kind: replay` |
-| `fingerprinting.sample_rate` validated only | Applied in the tentacle |
-| A client `fingerprint` on `/v0/diagnose` kept as is | Recomputed when a `shape` is present; a mismatch is rejected, as for observations |
-| `EchoReasoner` says "No path/shape evidence yet" when a shape is present | Possibilities from drift fragments; label fixed |
-| `ProcessHop` cannot mark an edge that crosses a span link | A `via` field, see [Process path in the dossier](flows-and-paths.md#process-path-in-the-dossier) |
+| Before | After | Step |
+|--------|-------|------|
+| `project_id` on `Incident`, `Dossier`, `DiagnoseRequest`, and the `/v0/diagnose` response | `system`, which `/v0/diagnose` checks against the loaded systems, so the notifier can pick the Slack channel | 2.4 |
+| `Incident` says nothing about what opened it | A required `trigger` ([Incident](dossier-and-decision.md#incident)) | 2.4 |
+| `sources[].dedupe_key` | `sources[].envelope`; new `kind: replay` | 1.3 |
+| `fingerprinting.sample_rate` validated only | Applied in the tentacle | 1.3 |
+| A client `fingerprint` on `/v0/diagnose` kept as is | Recomputed when a `shape` is present; a mismatch is `422`, as an observation's is rejected | 2.4 |
+| `EchoReasoner` says "No path/shape evidence yet" when a shape is present | One possibility per drift fragment; the `unknown` label names only the evidence that is absent | 2.4 |
+| `ProcessHop` cannot mark an edge that crosses a span link | An optional `via` on edge hops ([ProcessHop](dossier-and-decision.md#processhop)) | 2.4 |
+| `IngestService` takes `on_drift` in its constructor | `ingest` takes it per call ([Drift rules](#drift-rules)) | 2.4 |
 
 Step 1.1 made `Shape`, `ShapeField`, and `ShapeFingerprint` reject unknown fields
 ([Privacy invariants](observations.md#privacy-invariants)). Step 1.2 replaced `ShapeCatalog`
@@ -362,6 +479,17 @@ and `ShapeRecord` with `ObservationCatalog`, removed `OriginRegistry`, and added
 ([Migration](tentacle.md#migration)). Step 2.1 gave `ObservationCatalog` a baseline per stream
 key ([Baseline](#baseline)). Step 2.2 made `add_shape` return a `ShapeAdmission` instead of a
 `bool` and gave `IngestService` its `on_drift` hook ([Drift rules](#drift-rules)).
+
+Step 2.4 renamed `project_id` to `system` on `Incident`, `Dossier`, `DiagnoseRequest`, and the
+`/v0/diagnose` response, and `/v0/diagnose` rejects a system that is not loaded. It added the
+required `Incident.trigger`, so `/v0/diagnose` opens `manual` incidents and drift opens
+`shape_drift` ones ([Drift incidents](#drift-incidents)). `/v0/diagnose` now recomputes the
+fingerprint of a `shape` and rejects a client fingerprint that differs
+([Diagnose endpoint](dossier-and-decision.md#diagnose-endpoint)). `EchoReasoner` builds drift
+possibilities and its `unknown` label no longer claims a shape is absent when one is present
+([EchoReasoner](dossier-and-decision.md#echoreasoner)). `ProcessHop` gained `via`, set on edge
+hops only, and `ConsoleNotifier` names the incident's system and trigger. `on_drift` moved from
+the `IngestService` constructor to `ingest`.
 
 ## Open questions
 
