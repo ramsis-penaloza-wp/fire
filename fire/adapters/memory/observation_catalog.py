@@ -9,6 +9,7 @@ from datetime import datetime
 
 from fire.core.domain.baseline import Baseline, DriftPolicy
 from fire.core.domain.dossier import Shape
+from fire.core.domain.drift import Admission, ShapeAdmission
 from fire.core.domain.observation import (
     Channel,
     FingerprintSummary,
@@ -62,12 +63,13 @@ class MemoryObservationCatalog:
         self._spans: dict[tuple[str, str, str], SpanObservation] = {}
         self._streams: dict[str, dict[tuple[str, str], _Stream]] = {}
 
-    def add_shape(self, observation: ShapeObservation) -> bool:
+    def add_shape(self, observation: ShapeObservation) -> ShapeAdmission:
         schema_hash = observation.fingerprint.schema_hash
         observed_at = observation.observed_at
+        policy = self._policies.get(observation.system, self._default_policy)
         with self._lock:
             if observation.dedupe_key in self._index:
-                return False
+                return ShapeAdmission(outcome=Admission.DUPLICATE)
             self._index[observation.dedupe_key] = _IndexEntry(
                 stream_key=observation.stream_key,
                 schema_hash=schema_hash,
@@ -92,8 +94,7 @@ class MemoryObservationCatalog:
                 seen.observations += 1
                 seen.first_observed_at = min(seen.first_observed_at, observed_at)
                 seen.last_observed_at = max(seen.last_observed_at, observed_at)
-            stream.baseline.fold(schema_hash, observation.shape)
-            return True
+            return stream.baseline.admit(schema_hash, observation.shape, observed_at, policy)
 
     def add_span(self, observation: SpanObservation) -> bool:
         with self._lock:
@@ -124,6 +125,13 @@ class MemoryObservationCatalog:
                         ),
                         key=lambda summary: (-summary.observations, summary.schema_hash),
                     ),
+                    drift=[
+                        signal.model_copy(deep=True)
+                        for signal in sorted(
+                            stream.baseline.signals.values(),
+                            key=lambda signal: (signal.first_seen, signal.schema_hash),
+                        )
+                    ],
                 )
                 for (source, _key), stream in streams
             ]

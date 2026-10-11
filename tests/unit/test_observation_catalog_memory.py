@@ -13,6 +13,7 @@ from fire.adapters.memory.observation_catalog import MemoryObservationCatalog
 from fire.adapters.shapes.sha256 import Sha256ShapeFingerprinter
 from fire.core.domain.baseline import BaselineStatus, DriftPolicy
 from fire.core.domain.dossier import Shape, ShapeField, ValueType
+from fire.core.domain.drift import Admission, ShapeAdmission
 from fire.core.domain.observation import (
     Channel,
     ChannelDirection,
@@ -27,6 +28,9 @@ from fire.core.ports.observation_catalog import ObservationCatalog
 T0 = datetime(2026, 10, 11, 16, 30, tzinfo=UTC)
 TRACE_ID = "4bf92f3577b34da6a3ce929d0e0e4736"
 SPAN_ID = "00f067aa0ba902b7"
+FOLDED = ShapeAdmission(outcome=Admission.FOLDED)
+DUPLICATE = ShapeAdmission(outcome=Admission.DUPLICATE)
+DRIFTED = ("order_id", "coupon")
 
 
 def _channel(name: str = "order.created") -> Channel:
@@ -89,6 +93,7 @@ def _summary(catalog: MemoryObservationCatalog, system: str = "shop") -> list[di
                 (f.schema_hash, f.observations, f.first_observed_at, f.last_observed_at)
                 for f in stream.fingerprints
             ],
+            "drift": stream.drift,
         }
         for stream in catalog.streams(system)
     ]
@@ -98,6 +103,17 @@ def _baselines(
     catalog: MemoryObservationCatalog, system: str = "shop"
 ) -> list[tuple[BaselineStatus, int]]:
     return [(stream.status, stream.samples) for stream in catalog.streams(system)]
+
+
+def _warm(min_samples: int = 2) -> MemoryObservationCatalog:
+    catalog = MemoryObservationCatalog({"shop": DriftPolicy(min_samples=min_samples)})
+    for index in range(min_samples):
+        catalog.add_shape(_shape_observation(f"warm-{index}"))
+    return catalog
+
+
+def _schema_hash(paths: tuple[str, ...]) -> str:
+    return _shape_observation(paths=paths).fingerprint.schema_hash
 
 
 @pytest.mark.unit
@@ -110,7 +126,7 @@ def test_first_add_stores_and_summarizes_the_stream() -> None:
     catalog = MemoryObservationCatalog()
     observation = _shape_observation()
 
-    assert catalog.add_shape(observation) is True
+    assert catalog.add_shape(observation) == FOLDED
 
     [stream] = catalog.streams("shop")
     assert stream.source == "order-events"
@@ -126,15 +142,15 @@ def test_first_add_stores_and_summarizes_the_stream() -> None:
 
 
 @pytest.mark.unit
-def test_second_add_of_one_shape_key_returns_false_and_changes_nothing() -> None:
+def test_second_add_of_one_shape_key_is_a_duplicate_and_changes_nothing() -> None:
     catalog = MemoryObservationCatalog()
-    assert catalog.add_shape(_shape_observation()) is True
+    assert catalog.add_shape(_shape_observation()) == FOLDED
     before = _summary(catalog)
 
     resent = _shape_observation(
         paths=("order_id", "total"), observed_at=T0 + timedelta(hours=1), work_id="w-2"
     )
-    assert catalog.add_shape(resent) is False
+    assert catalog.add_shape(resent) == DUPLICATE
 
     assert _summary(catalog) == before
 
@@ -154,14 +170,15 @@ def test_concurrent_adds_store_once() -> None:
     observation = _shape_observation()
     span = _span()
 
-    def add(_: int) -> tuple[bool, bool]:
+    def add(_: int) -> tuple[ShapeAdmission, bool]:
         barrier.wait()
         return catalog.add_shape(observation), catalog.add_span(span)
 
     with ThreadPoolExecutor(max_workers=workers) as pool:
         results = list(pool.map(add, range(workers)))
 
-    assert [shape for shape, _ in results].count(True) == 1
+    assert [shape.stored for shape, _ in results].count(True) == 1
+    assert [shape for shape, _ in results].count(DUPLICATE) == workers - 1
     assert [stored for _, stored in results].count(True) == 1
     [stream] = catalog.streams("shop")
     assert stream.observations == stream.samples == 1
@@ -170,8 +187,8 @@ def test_concurrent_adds_store_once() -> None:
 @pytest.mark.unit
 def test_one_event_from_two_sources_is_two_observations() -> None:
     catalog = MemoryObservationCatalog()
-    assert catalog.add_shape(_shape_observation(source="order-events")) is True
-    assert catalog.add_shape(_shape_observation(source="order-table")) is True
+    assert catalog.add_shape(_shape_observation(source="order-events")) == FOLDED
+    assert catalog.add_shape(_shape_observation(source="order-table")) == FOLDED
 
     streams = catalog.streams("shop")
     assert [(stream.source, stream.observations) for stream in streams] == [
@@ -190,8 +207,8 @@ def test_one_span_from_two_sources_is_one_observation() -> None:
 @pytest.mark.unit
 def test_one_observation_id_in_two_systems_is_two_observations() -> None:
     catalog = MemoryObservationCatalog()
-    assert catalog.add_shape(_shape_observation(system="shop")) is True
-    assert catalog.add_shape(_shape_observation(system="billing")) is True
+    assert catalog.add_shape(_shape_observation(system="shop")) == FOLDED
+    assert catalog.add_shape(_shape_observation(system="billing")) == FOLDED
     assert catalog.add_span(_span(system="shop")) is True
     assert catalog.add_span(_span(system="billing")) is True
 
@@ -302,14 +319,14 @@ def test_system_without_a_policy_gets_the_default_min_samples() -> None:
 @pytest.mark.unit
 def test_duplicate_add_folds_nothing() -> None:
     catalog = MemoryObservationCatalog({"shop": DriftPolicy(min_samples=2)})
-    assert catalog.add_shape(_shape_observation()) is True
-    assert catalog.add_shape(_shape_observation(paths=("order_id", "total"))) is False
+    assert catalog.add_shape(_shape_observation()) == FOLDED
+    assert catalog.add_shape(_shape_observation(paths=("order_id", "total"))) == DUPLICATE
 
     assert _baselines(catalog) == [(BaselineStatus.REBUILDING, 1)]
 
 
 @pytest.mark.unit
-def test_samples_count_every_stored_observation_of_a_stream() -> None:
+def test_samples_count_every_stored_observation_while_rebuilding() -> None:
     catalog = MemoryObservationCatalog()
     forms = [("a",), ("b",), ("a",), ("a", "b")]
     for index, paths in enumerate(forms):
@@ -342,3 +359,79 @@ def test_each_stream_key_has_its_own_baseline() -> None:
         ("order-events", "order.shipped", BaselineStatus.REBUILDING, 1),
         ("order-table", "order.created", BaselineStatus.REBUILDING, 1),
     ]
+
+
+@pytest.mark.unit
+def test_streams_list_drift_signals_by_first_seen_then_schema_hash() -> None:
+    catalog = _warm()
+    added = [
+        ("late", ("order_id", "a"), 10),
+        ("tie-1", ("order_id", "b"), 5),
+        ("tie-2", ("order_id", "c"), 5),
+        ("early", ("order_id", "a"), 1),
+    ]
+    for observation_id, paths, minutes in added:
+        catalog.add_shape(
+            _shape_observation(
+                observation_id, paths=paths, observed_at=T0 + timedelta(minutes=minutes)
+            )
+        )
+
+    [stream] = catalog.streams("shop")
+    tied = sorted([_schema_hash(("order_id", "b")), _schema_hash(("order_id", "c"))])
+    assert [(s.schema_hash, s.occurrences, s.first_seen) for s in stream.drift] == [
+        (_schema_hash(("order_id", "a")), 2, T0 + timedelta(minutes=1)),
+        (tied[0], 1, T0 + timedelta(minutes=5)),
+        (tied[1], 1, T0 + timedelta(minutes=5)),
+    ]
+
+
+@pytest.mark.unit
+def test_drifted_observations_count_in_fingerprints_but_not_in_samples() -> None:
+    catalog = _warm()
+    for index in range(3):
+        assert catalog.add_shape(_shape_observation(f"drift-{index}", paths=DRIFTED)).stored
+
+    [stream] = catalog.streams("shop")
+    assert (stream.status, stream.samples, stream.observations) == (BaselineStatus.WARM, 2, 5)
+    assert [(f.schema_hash, f.observations) for f in stream.fingerprints] == [
+        (_schema_hash(DRIFTED), 3),
+        (_schema_hash(("order_id",)), 2),
+    ]
+    assert [(s.schema_hash, s.occurrences) for s in stream.drift] == [(_schema_hash(DRIFTED), 3)]
+
+
+@pytest.mark.unit
+def test_duplicate_of_a_drifted_observation_adds_no_occurrence() -> None:
+    catalog = _warm()
+    drifted = _shape_observation("drift-0", paths=DRIFTED)
+    assert catalog.add_shape(drifted).outcome is Admission.DRIFT_RAISED
+    before = _summary(catalog)
+
+    resent = _shape_observation("drift-0", paths=DRIFTED, observed_at=T0 + timedelta(hours=1))
+    assert catalog.add_shape(resent) == DUPLICATE
+
+    assert _summary(catalog) == before
+    [stream] = catalog.streams("shop")
+    assert [signal.occurrences for signal in stream.drift] == [1]
+
+
+@pytest.mark.unit
+def test_concurrent_adds_of_one_drifted_fingerprint_raise_one_signal() -> None:
+    catalog = _warm()
+    workers = 16
+    barrier = threading.Barrier(workers)
+
+    def add(index: int) -> Admission:
+        observation = _shape_observation(f"drift-{index}", paths=DRIFTED)
+        barrier.wait()
+        return catalog.add_shape(observation).outcome
+
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        outcomes = list(pool.map(add, range(workers)))
+
+    assert outcomes.count(Admission.DRIFT_RAISED) == 1
+    assert outcomes.count(Admission.DRIFT_REPEATED) == workers - 1
+    [stream] = catalog.streams("shop")
+    assert [signal.occurrences for signal in stream.drift] == [workers]
+    assert (stream.samples, stream.observations) == (2, 2 + workers)

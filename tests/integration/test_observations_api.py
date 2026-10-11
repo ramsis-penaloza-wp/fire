@@ -271,6 +271,7 @@ def test_streams_counts_accepted_items_only(client: TestClient) -> None:
                 "samples": 1,
                 "observations": 1,
                 "fingerprints": [fingerprint],
+                "drift": [],
             }
             for source in ("order-events", "order-table")
         ],
@@ -303,6 +304,157 @@ def test_streams_show_the_baseline_turning_warm_at_the_systems_min_samples(
     assert _post(client, {"shapes": second}).json()["shapes"] == _counts(duplicate=2)
     assert _baselines(client, "warm") == [("warm", 2, 2)]
     assert _baselines(client, "shop") == [("baseline rebuilding", 2, 2)]
+
+
+def _shape_of(*fields: tuple[str, str]) -> dict[str, Any]:
+    return {
+        "fields": [
+            {"path": path, "value_type": value_type, "cardinality": "1", "optional": False}
+            for path, value_type in fields
+        ]
+    }
+
+
+def _fingerprint(shape: dict[str, Any]) -> dict[str, Any]:
+    return Sha256ShapeFingerprinter().fingerprint(Shape.model_validate(shape)).model_dump()
+
+
+BASELINE_SHAPE = _shape_of(("amount_cents", "integer"), ("order_ref", "string"))
+# Against BASELINE_SHAPE: coupon_code added, order_ref an integer, amount_cents removed.
+DRIFTED_SHAPE = _shape_of(("coupon_code", "string"), ("order_ref", "integer"))
+BASELINE_HASH = _fingerprint(BASELINE_SHAPE)["schema_hash"]
+DRIFTED_HASH = _fingerprint(DRIFTED_SHAPE)["schema_hash"]
+DIFF_PATHS = ["amount_cents", "coupon_code", "order_ref"]
+DRIFT_LOG = (
+    "shape drift raised: system=warm source=order-events "
+    f"stream=event:internal:order.created:payload fingerprint={DRIFTED_HASH} "
+    "added=1 type_changed=1 removed=1"
+)
+DRIFT_SIGNAL = {
+    "schema_hash": DRIFTED_HASH,
+    "diff": {
+        "added": [{"path": "coupon_code", "value_type": "string"}],
+        "type_changed": [{"path": "order_ref", "old": ["string"], "new": ["integer"]}],
+        "removed": [{"path": "amount_cents", "value_type": "integer"}],
+    },
+    "occurrences": 1,
+    "first_seen": "2026-10-11T16:31:10Z",
+    "last_seen": "2026-10-11T16:31:10Z",
+}
+
+
+def _warm_shape(observation_id: str, second: int, shape: dict[str, Any]) -> dict[str, Any]:
+    return _shape(
+        system="warm",
+        observation_id=observation_id,
+        observed_at=f"2026-10-11T16:31:{second:02d}Z",
+        shape=shape,
+        fingerprint=_fingerprint(shape),
+    )
+
+
+def _warm_up(client: TestClient) -> None:
+    """Two baseline observations: the `warm` system's `drift.min_samples`."""
+    baseline = [_warm_shape(f"base-{second}", second, BASELINE_SHAPE) for second in (0, 1)]
+    assert _post(client, {"shapes": baseline}).json()["shapes"] == _counts(accepted=2)
+
+
+def _warm_stream(client: TestClient) -> dict[str, Any]:
+    response = client.get("/v0/systems/warm/streams", headers=HEADERS)
+    assert response.status_code == 200
+    [stream] = response.json()["streams"]
+    return stream
+
+
+def _drift_lines(caplog: pytest.LogCaptureFixture) -> list[tuple[str, int, str]]:
+    return [record for record in caplog.record_tuples if "shape drift raised" in record[2]]
+
+
+@pytest.mark.integration
+def test_different_shape_on_a_rebuilding_stream_folds_and_raises_nothing(
+    client: TestClient, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.INFO)
+    batch = [_warm_shape("base-0", 0, BASELINE_SHAPE), _warm_shape("drift-0", 10, DRIFTED_SHAPE)]
+
+    assert _post(client, {"shapes": batch}).json()["shapes"] == _counts(accepted=2)
+
+    stream = _warm_stream(client)
+    assert (stream["status"], stream["samples"], stream["observations"]) == ("warm", 2, 2)
+    assert stream["drift"] == []
+    assert _drift_lines(caplog) == []
+
+
+@pytest.mark.integration
+def test_drifted_shape_on_a_warm_stream_is_one_signal_with_its_exact_diff(
+    client: TestClient,
+) -> None:
+    _warm_up(client)
+
+    drifted = [_warm_shape("drift-0", 10, DRIFTED_SHAPE)]
+    assert _post(client, {"shapes": drifted}).json()["shapes"] == _counts(accepted=1)
+
+    assert _warm_stream(client) == {
+        "source": "order-events",
+        "key": "event:internal:order.created:payload",
+        "status": "warm",
+        "samples": 2,
+        "observations": 3,
+        "fingerprints": [
+            {
+                "schema_hash": BASELINE_HASH,
+                "observations": 2,
+                "first_observed_at": "2026-10-11T16:31:00Z",
+                "last_observed_at": "2026-10-11T16:31:01Z",
+            },
+            {
+                "schema_hash": DRIFTED_HASH,
+                "observations": 1,
+                "first_observed_at": "2026-10-11T16:31:10Z",
+                "last_observed_at": "2026-10-11T16:31:10Z",
+            },
+        ],
+        "drift": [DRIFT_SIGNAL],
+    }
+
+
+@pytest.mark.integration
+def test_drifted_fingerprint_sent_again_adds_occurrences_and_logs_once(
+    client: TestClient, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.INFO)
+    _warm_up(client)
+
+    first = [_warm_shape("drift-0", 10, DRIFTED_SHAPE)]
+    again = [_warm_shape(f"drift-{second}", 10 + second, DRIFTED_SHAPE) for second in (1, 2)]
+    assert _post(client, {"shapes": first}).json()["shapes"] == _counts(accepted=1)
+    assert _post(client, {"shapes": again}).json()["shapes"] == _counts(accepted=2)
+
+    stream = _warm_stream(client)
+    assert (stream["samples"], stream["observations"]) == (2, 5)
+    assert stream["drift"] == [
+        {**DRIFT_SIGNAL, "occurrences": 3, "last_seen": "2026-10-11T16:31:12Z"}
+    ]
+    assert _drift_lines(caplog) == [("fire.apps.incident_engine.wiring", logging.INFO, DRIFT_LOG)]
+    for path in DIFF_PATHS:
+        assert path not in caplog.text
+
+
+@pytest.mark.integration
+def test_duplicate_of_a_drifted_item_adds_no_occurrence(
+    client: TestClient, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.INFO)
+    _warm_up(client)
+    drifted = [_warm_shape("drift-0", 10, DRIFTED_SHAPE)]
+
+    assert _post(client, {"shapes": drifted}).json()["shapes"] == _counts(accepted=1)
+    assert _post(client, {"shapes": drifted}).json()["shapes"] == _counts(duplicate=1)
+
+    stream = _warm_stream(client)
+    assert (stream["samples"], stream["observations"]) == (2, 3)
+    assert stream["drift"] == [DRIFT_SIGNAL]
+    assert len(_drift_lines(caplog)) == 1
 
 
 @pytest.mark.integration

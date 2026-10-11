@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -13,11 +14,15 @@ from fire.adapters.reasoners.echo import EchoReasoner
 from fire.adapters.shapes.sha256 import Sha256ShapeFingerprinter
 from fire.apps.config import FireConfig, SystemConfig, load_fire_config, load_system_configs
 from fire.apps.discovery import Discovery, check_manifest_kinds, discover
+from fire.core.domain.drift import DriftSignal
+from fire.core.domain.observation import ShapeObservation
 from fire.core.ports.manifest_parser import ManifestParser
 from fire.core.ports.observation_catalog import ObservationCatalog
 from fire.core.ports.shape_fingerprinter import ShapeFingerprinter
 from fire.core.services.diagnosis import DiagnosisService
 from fire.core.services.ingest import IngestService
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_CONFIG = Path(__file__).resolve().parents[3] / "config" / "fire.yml"
 
@@ -36,6 +41,21 @@ class Container:
 def manifest_parsers() -> dict[str, ManifestParser]:
     parser = EventChainsGraphParser()
     return {parser.kind: parser}
+
+
+def log_drift(observation: ShapeObservation, signal: DriftSignal) -> None:
+    """One INFO line per new drift signal, with names and counts only: a path may hold data."""
+    logger.info(
+        "shape drift raised: system=%s source=%s stream=%s fingerprint=%s "
+        "added=%d type_changed=%d removed=%d",
+        observation.system,
+        observation.source,
+        observation.channel.key,
+        signal.schema_hash,
+        len(signal.diff.added),
+        len(signal.diff.type_changed),
+        len(signal.diff.removed),
+    )
 
 
 def build_container(config_path: Path | None = None) -> Container:
@@ -75,7 +95,7 @@ def build_container(config_path: Path | None = None) -> Container:
         diagnosis=diagnosis,
         fingerprinter=fingerprinter,
         catalog=catalog,
-        ingest=IngestService(catalog, fingerprinter, sources),
+        ingest=IngestService(catalog, fingerprinter, sources, on_drift=log_drift),
         systems=systems,
         discoveries={name: discover(system, parsers) for name, system in systems.items()},
     )
