@@ -3,7 +3,8 @@
 **Status: phase 0 is done; phases 1 to 4 are a proposal.** This is the route from today's
 engine, which only diagnoses what a caller posts to `POST /v0/diagnose`, to an engine that
 watches a system on its own, detects shape drift, diagnoses incidents, and learns from
-feedback.
+feedback. The order of work, with what each step must achieve and how it is tested, is in
+[docs/roadmap.md](../roadmap.md).
 
 ## Goal
 
@@ -74,79 +75,44 @@ Checked against `order-management-gateway`:
 
 ## Phase 1: ingest plane
 
+The tentacle intercepts what enters and leaves the system: inbound HTTP, inbound external
+events, internal domain events, outbound partner calls, and outbound AWS calls. It keeps
+fingerprints per endpoint and the trace logic of each entry point. The details live in four
+proposals, each implemented by the roadmap steps it names.
+
 ### Observation
 
-`fire/core/domain/observation.py`. One payload seen by the tentacle, without its values.
-Unknown fields are rejected.
-
-| Field | Type | Meaning |
-|-------|------|---------|
-| `system` | `str` | System id; must be a loaded `config/systems/<system>.yml` |
-| `source` | `str` | Source id from the system YAML |
-| `event_type` | `str` | The record's event type |
-| `event_id` | `str` | The record's unique id; deduplication and DLQ joins use it |
-| `correlation_id` | `str \| None` | Set only when the source carries one |
-| `region` | `str \| None` | Region of the stream it was read from |
-| `occurred_at` | `datetime` | When the system says the event happened |
-| `observed_at` | `datetime` | When the tentacle read it |
-| `shape` | `Shape` | From `FlatStarShapeGeneralizer` |
-| `fingerprint` | `ShapeFingerprint` | From `Sha256ShapeFingerprinter` |
-
-The stream key of an observation is `(system, source, event_type)`. Baselines, drift, and
-coverage are per stream key, so a replay source and a Kinesis source never share a baseline
-even when they carry the same events in different casing.
+[observations.md](observations.md) defines `Channel` (event or endpoint, with direction,
+part, and status class), `ShapeObservation`, `SpanObservation`, the stream key
+`(system, source, channel)`, deduplication, the ingest endpoint, and the catalog port. It
+replaces the event-only observation this section first proposed.
 
 ### Sources in the system YAML
 
-Each source gets an `id` and an `envelope` that says where the tentacle finds each envelope
-value in a record. Paths are dotted. `envelope.event_id` replaces `dedupe_key`.
-
-```yaml
-sources:
-  - id: domain-events
-    kind: kinesis
-    stream_env: OMG_EVENTS_STREAM
-    regions: [us-east-1, us-west-2]
-    envelope:
-      event_id: id
-      event_type: eventType
-      occurred_at: occurredAt
-      payload: payload
-  - id: work-unit-samples
-    kind: replay
-    path_env: OMG_REPLAY_PATH          # a .json, .jsonl, or a directory of them
-    envelope:
-      event_id: work_unit_id
-      event_type: event_type
-      occurred_at: metadata.timestamp
-      correlation_id: metadata.correlation_id
-      payload: payload
-```
-
-A record missing a required envelope value is counted as rejected per source and never sent.
+[tentacle.md](tentacle.md#sources-in-the-system-yaml) defines each source's `id`, `kind`, and
+`envelope`, and the record kinds `replay`, `kinesis`, `dynamodb_stream`, `sns_fanout`, and
+`s3_capture`. [http-and-span-capture.md](http-and-span-capture.md) defines the kinds `otlp`
+and `http_proxy`. `envelope.event_id` replaces `dedupe_key`.
 
 ### Tentacle
 
-`python -m fire.apps.tentacle --system omg [--source work-unit-samples]`
-
-- Port `RecordSource` (`fire/core/ports/record_source.py`): an async iterator of raw records
-  with the source id and region. Adapters: `ReplayRecordSource` and `KinesisRecordSource`
-  (polling `GetRecords` per shard and region; adds an AWS SDK dependency).
-- Per record: read the envelope, generalize the payload, fingerprint the shape, build the
-  `Observation`, and batch. Batches go to `POST /v0/observations`.
-- `fingerprinting.sample_rate` is applied here. DLQ attribution (phase 3) needs every
-  event's fingerprint, so OMG uses `1.0`.
+[tentacle.md](tentacle.md) defines the process, the sender, the record pipeline, the privacy
+rules, and the canary harness. [http-and-span-capture.md](http-and-span-capture.md) defines
+the span attribute allowlist, operation names, and the inbound proxy.
+`fingerprinting.sample_rate` is applied in the tentacle; DLQ attribution (phase 3) needs every
+event's fingerprint, so OMG uses `1.0`.
 
 ### Ingest endpoint and catalog
 
-- `POST /v0/observations` takes `{"observations": [...]}`, requires `X-FIRE-Token`, and
-  returns `202` with accepted, duplicate, and rejected counts. An unknown `system` or
-  `source` is rejected per observation.
-- Port `ObservationCatalog` replaces `ShapeCatalog`. It stores per stream key the baseline
-  (below) and, per `event_id`, the fingerprint and `observed_at` for a retention window. The
-  `event_id` index makes ingest idempotent, so several tentacles or both regions are safe.
-- First adapter: in memory (`fire/adapters/memory/`). A restart loses the baselines and the
-  engine reports them as rebuilding. SQLite comes after the demo.
+[observations.md](observations.md#ingest-endpoint) defines `POST /v0/observations` and the
+`ObservationCatalog` port that replaces `ShapeCatalog`. The first adapter is in memory
+(`fire/adapters/memory/`); a restart loses the baselines and the engine reports them as
+rebuilding. SQLite comes after the demo.
+
+### Flows and paths
+
+[flows-and-paths.md](flows-and-paths.md) defines how the body assembles spans into flows,
+learns a path per entry operation, and attaches shapes to their spans.
 
 ## Phase 2: drift
 
@@ -185,13 +151,15 @@ drift:
 
 ### Drift incidents
 
-A drift signal opens an `Incident` with `trigger: shape_drift`. `Incident` gains a `trigger`
-field (`shape_drift`, `incident_io`, `http_errors`, `manual`); `POST /v0/diagnose` becomes
-`manual`. The dossier carries these fragments:
+A shape drift signal opens an `Incident` with `trigger: shape_drift`, and a path drift signal
+one with `trigger: path_drift`. `Incident` gains a `trigger` field (`shape_drift`,
+`path_drift`, `incident_io`, `http_errors`, `manual`); `POST /v0/diagnose` becomes `manual`.
+The dossier carries these fragments:
 
 | Collector | Data |
 |-----------|------|
 | `shape_drift` | Stream key, the diff (added, type_changed, removed paths), occurrences, first seen |
+| `path_drift` | Entry operation, rule, operation, occurrences, first seen; see [Path drift](flows-and-paths.md#path-drift) |
 | `baseline` | Samples, status, fingerprints known |
 | `coverage` | The system's `CoverageReport` from observed event types |
 
@@ -271,6 +239,8 @@ drift signals. Both read endpoints require `X-FIRE-Token`.
 | `fingerprinting.sample_rate` validated only | Applied in the tentacle |
 | A client `fingerprint` on `/v0/diagnose` kept as is | Recomputed when a `shape` is present; a mismatch is rejected, as for observations |
 | `EchoReasoner` says "No path/shape evidence yet" when a shape is present | Possibilities from drift fragments; label fixed |
+| `ProcessHop` cannot mark an edge that crosses a span link | A `via` field, see [Process path in the dossier](flows-and-paths.md#process-path-in-the-dossier) |
+| `Shape`, `ShapeField`, `ShapeFingerprint` accept unknown fields | Unknown fields rejected, see [Migration](observations.md#migration) |
 
 ## Open questions
 
