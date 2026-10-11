@@ -46,7 +46,9 @@ added):
   reasoners, narrators, notifiers). Imports `core`.
 - `fire/apps/` — runnable apps (incident engine). Imports both.
 - `config/systems/` — one YAML per watched system; all per-system variability
-  lives here, never in core.
+  lives here, never in core. It declares decisions (Slack channel id, manifest
+  location, sources, policy exceptions); what the system contains is discovered
+  from its manifest, never listed by hand (`docs/specs/system-config-and-discovery.md`).
 - `config/runbooks/` — markdown runbooks indexed into the knowledge store.
 - `infrastructure/` — Terraform (later).
 
@@ -109,6 +111,9 @@ Jev/Laya **decides**; the **Narrator** only writes readable prose for Slack.
 Scaffold **v0** is in tree: hexagonal `fire/{core,adapters,apps}`, ports
 Reasoner ≠ Narrator ≠ Notifier, Echo/Template/Console stubs, FastAPI
 `POST /v0/diagnose` (auth fail-closed), config templates, unit tests.
+The engine computes a shape fingerprint when a shape arrives without one, validates
+`config/systems/*.yml` at startup, and discovers each system's inventory from its
+manifest (`event_chains_graph` format) for the coverage audit.
 
 Next: Laya/Jev System One adapter, OpenAI-compat Narrator, Slack notifier,
 real collectors — still no Panoptes copy / no `omg.yml`.
