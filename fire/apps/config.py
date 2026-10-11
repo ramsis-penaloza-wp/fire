@@ -77,6 +77,8 @@ class DiscoveryConfig(_Strict):
 
 
 class KinesisSourceConfig(_Strict):
+    # The `source` of every observation read from it; unique within the system.
+    id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]*$")
     kind: Literal["kinesis"]
     stream_env: str = Field(min_length=1)
     regions: list[str] = Field(min_length=1)
@@ -107,6 +109,17 @@ class SystemConfig(_Strict):
     sources: list[KinesisSourceConfig] = Field(default_factory=list)
     policy: PolicyConfig = Field(default_factory=PolicyConfig)
     fingerprinting: FingerprintingConfig = Field(default_factory=FingerprintingConfig)
+
+    @model_validator(mode="after")
+    def _source_ids_are_unique(self) -> SystemConfig:
+        ids = [source.id for source in self.sources]
+        duplicates = sorted({source_id for source_id in ids if ids.count(source_id) > 1})
+        if duplicates:
+            raise ValueError(f"duplicate source ids: {', '.join(duplicates)}")
+        return self
+
+    def source_ids(self) -> frozenset[str]:
+        return frozenset(source.id for source in self.sources)
 
 
 def load_system_config(path: Path) -> SystemConfig:

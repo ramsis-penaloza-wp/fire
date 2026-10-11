@@ -1,1 +1,1 @@
-"""Shape adapters (generalizer, future catalog)."""
+"""Shape adapters: generalizer and fingerprinter."""

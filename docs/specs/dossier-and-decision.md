@@ -54,9 +54,7 @@ The evidence bundle the reasoner and narrator read. Each fact has exactly one fi
 | `process_path` | Ordered `ProcessHop`s |
 | `fragments` | Every `EvidenceFragment`, present or missing |
 
-No field restates another. The dossier does not carry a `ShapeRecord`: its `project_id`,
-`origin_id`, `shape`, and `fingerprint` are already on the dossier. `ShapeRecord` remains a
-domain model for the `ShapeCatalog` port.
+No field restates another.
 
 `Dossier` rejects unknown fields, so a caller passing a removed field fails instead of
 silently losing data.

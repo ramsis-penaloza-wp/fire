@@ -90,15 +90,6 @@ class ShapeFingerprint(BaseModel):
     notes: str | None = None
 
 
-class ShapeRecord(BaseModel):
-    """Domain association of a Shape to a project Origin — not a DB model."""
-
-    project_id: str
-    origin_id: str
-    shape: Shape
-    fingerprint: ShapeFingerprint
-
-
 class ProcessHop(BaseModel):
     """One hop on the path by reference — shape-safe; never embeds Shape.
 

@@ -234,16 +234,17 @@ drift signals. Both read endpoints require `X-FIRE-Token`.
 | Today | Proposed |
 |-------|----------|
 | `project_id` on `Incident`, `Dossier`, `DiagnoseRequest` | `system`, validated against loaded systems, so the notifier can pick the Slack channel |
-| `ShapeCatalog`, `ShapeRecord` (no adapter) | `ObservationCatalog` and a baseline per stream key |
-| `OriginRegistry` (no adapter) | Removed until a source needs origins |
-| `sources[].dedupe_key` | `sources[].id` and `sources[].envelope`; new `kind: replay` |
+| `ObservationCatalog` without baselines | A baseline per stream key |
+| `sources[].dedupe_key` | `sources[].envelope`; new `kind: replay` |
 | `fingerprinting.sample_rate` validated only | Applied in the tentacle |
 | A client `fingerprint` on `/v0/diagnose` kept as is | Recomputed when a `shape` is present; a mismatch is rejected, as for observations |
 | `EchoReasoner` says "No path/shape evidence yet" when a shape is present | Possibilities from drift fragments; label fixed |
 | `ProcessHop` cannot mark an edge that crosses a span link | A `via` field, see [Process path in the dossier](flows-and-paths.md#process-path-in-the-dossier) |
 
 Step 1.1 made `Shape`, `ShapeField`, and `ShapeFingerprint` reject unknown fields
-([Privacy invariants](observations.md#privacy-invariants)).
+([Privacy invariants](observations.md#privacy-invariants)). Step 1.2 replaced `ShapeCatalog`
+and `ShapeRecord` with `ObservationCatalog`, removed `OriginRegistry`, and added
+`sources[].id` ([Migration](observations.md#migration)).
 
 ## Open questions
 
