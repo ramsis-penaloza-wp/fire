@@ -1,2 +1,2 @@
 """Ports: Reasoner, Narrator, Notifier, OriginRegistry, ShapeCatalog, ShapeGeneralizer,
-ShapeFingerprinter."""
+ShapeFingerprinter, ManifestParser."""
