@@ -12,6 +12,7 @@ from typing import Any
 import httpx
 import pytest
 
+from fire.adapters.shapes.flat_star import FlatStarShapeGeneralizer
 from fire.adapters.shapes.sha256 import Sha256ShapeFingerprinter
 from fire.apps.config import TentacleConfig
 from fire.apps.tentacle.counters import SourceCounters
@@ -116,6 +117,22 @@ async def test_accepted_batch_is_sent_and_acked() -> None:
     counters = harness.counters["a"]
     assert (counters.sent, counters.unsent, counters.pending) == (2, 0, 0)
     assert harness.acked == ["o1", "obs-1"]
+
+
+@pytest.mark.unit
+async def test_a_null_field_keeps_its_fingerprint_on_the_wire() -> None:
+    shape = FlatStarShapeGeneralizer().generalize({"adminId": None, "items": []})
+    observation = _observation().model_copy(
+        update={"shape": shape, "fingerprint": Sha256ShapeFingerprinter().fingerprint(shape)}
+    )
+    harness = Harness(Body())
+    harness.counters["a"].built += 1
+    await harness.sender.send([Outgoing(observation, harness.outgoing().ack)])
+
+    [request] = harness.body.requests
+    [posted] = json.loads(request.content)["shapes"]
+    again = Shape.model_validate(posted["shape"])
+    assert Sha256ShapeFingerprinter().fingerprint(again) == observation.fingerprint
 
 
 @pytest.mark.unit

@@ -107,12 +107,9 @@ class Sender:
     async def send(self, batch: list[Outgoing]) -> None:
         """Posts one source's batch, retrying as configured; counts it sent or unsent."""
         source = batch[0].observation.source
+        # Nulls stay: a field of a JSON null has a null cardinality, whose default is "1".
         content = json.dumps(
-            {
-                "shapes": [
-                    item.observation.model_dump(mode="json", exclude_none=True) for item in batch
-                ]
-            }
+            {"shapes": [item.observation.model_dump(mode="json") for item in batch]}
         ).encode()
         status = "none"
         attempt = 0
