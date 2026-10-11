@@ -18,6 +18,7 @@ from pydantic import (
     field_validator,
 )
 
+from fire.core.domain.baseline import BaselineStatus
 from fire.core.domain.dossier import Shape, ShapeFingerprint
 
 MAX_STR_LENGTH = 256
@@ -224,12 +225,18 @@ class FingerprintSummary(BaseModel):
 
 
 class StreamSummary(BaseModel):
-    """One stream key of a system, `(source, channel)`, and the fingerprints seen on it."""
+    """One stream key of a system, `(source, channel)`: its baseline and the fingerprints seen.
+
+    `samples` counts the observations folded into the baseline; `status` is `warm` once it
+    reaches the system's `drift.min_samples`.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
     source: BoundedStr
     channel: Channel
+    status: BaselineStatus
+    samples: int = Field(ge=0)
     fingerprints: list[FingerprintSummary] = Field(min_length=1)
 
     @property

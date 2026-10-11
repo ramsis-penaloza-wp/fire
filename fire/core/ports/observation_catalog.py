@@ -13,11 +13,13 @@ class ObservationCatalog(Protocol):
 
     `add_shape` and `add_span` store an observation unless its dedupe key is known and return
     whether they did. Checking and storing a key is one atomic step, so concurrent tentacles,
-    two regions, and resent batches store each observation once.
+    two regions, and resent batches store each observation once. A stored shape folds into the
+    baseline of its stream key in the same step.
 
     `streams` returns one summary per stream key of the system, sorted by `source`, then
-    `key`; each summary's fingerprints are sorted by `observations` descending, then
-    `schema_hash`. A system with no observations has none.
+    `key`, with the baseline's `samples` and its `status` under the system's drift policy;
+    each summary's fingerprints are sorted by `observations` descending, then `schema_hash`.
+    A system with no observations has none.
 
     Contract: docs/specs/observations.md#observationcatalog.
     """

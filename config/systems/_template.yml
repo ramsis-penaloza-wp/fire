@@ -39,3 +39,9 @@ policy:
 # Shape fingerprint sampling (no raw values stored).
 fingerprinting:
   sample_rate: 0.02
+
+# Baselines and shape drift. Until min_samples observations fold, a stream is
+# `baseline rebuilding` and raises no drift.
+drift:
+  min_samples: 20                    # observations folded before a stream is warm
+  required_ratio: 1.0                # share of samples that makes a field required, in (0, 1]

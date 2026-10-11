@@ -69,8 +69,10 @@ def _span(**overrides: Any) -> dict[str, Any]:
     return item
 
 
-def _write_system(directory: Path, system: str, source_ids: list[str]) -> None:
-    raw = {
+def _write_system(
+    directory: Path, system: str, source_ids: list[str], drift: dict[str, Any] | None = None
+) -> None:
+    raw: dict[str, Any] = {
         "system": system,
         "display_name": system.title(),
         "notify": {"slack": {"channel_id": "C0123456789"}},
@@ -91,6 +93,8 @@ def _write_system(directory: Path, system: str, source_ids: list[str]) -> None:
             for source_id in source_ids
         ],
     }
+    if drift is not None:
+        raw["drift"] = drift
     (directory / f"{system}.yml").write_text(yaml.safe_dump(raw), encoding="utf-8")
 
 
@@ -101,6 +105,7 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClie
     systems.mkdir()
     _write_system(systems, "shop", ["order-events", "order-table", "traces"])
     _write_system(systems, "billing", [])
+    _write_system(systems, "warm", ["order-events"], drift={"min_samples": 2})
     monkeypatch.setenv("FIRE_API_TOKEN", TOKEN)
     app_module._container = build_container(tmp_path / "fire.yml")
     # Not entered as a context manager: the lifespan would replace this container with one
@@ -262,12 +267,42 @@ def test_streams_counts_accepted_items_only(client: TestClient) -> None:
             {
                 "source": source,
                 "key": "event:internal:order.created:payload",
+                "status": "baseline rebuilding",
+                "samples": 1,
                 "observations": 1,
                 "fingerprints": [fingerprint],
             }
             for source in ("order-events", "order-table")
         ],
     }
+
+
+def _baselines(client: TestClient, system: str) -> list[tuple[str, int, int]]:
+    response = client.get(f"/v0/systems/{system}/streams", headers=HEADERS)
+    assert response.status_code == 200
+    return [
+        (stream["status"], stream["samples"], stream["observations"])
+        for stream in response.json()["streams"]
+    ]
+
+
+@pytest.mark.integration
+def test_streams_show_the_baseline_turning_warm_at_the_systems_min_samples(
+    client: TestClient,
+) -> None:
+    first = [_shape(system="warm"), _shape()]
+    second = [_shape(system="warm", observation_id="obs-2"), _shape(observation_id="obs-2")]
+
+    assert _post(client, {"shapes": first}).json()["shapes"] == _counts(accepted=2)
+    assert _baselines(client, "warm") == [("baseline rebuilding", 1, 1)]
+
+    assert _post(client, {"shapes": second}).json()["shapes"] == _counts(accepted=2)
+    assert _baselines(client, "warm") == [("warm", 2, 2)]
+    assert _baselines(client, "shop") == [("baseline rebuilding", 2, 2)]
+
+    assert _post(client, {"shapes": second}).json()["shapes"] == _counts(duplicate=2)
+    assert _baselines(client, "warm") == [("warm", 2, 2)]
+    assert _baselines(client, "shop") == [("baseline rebuilding", 2, 2)]
 
 
 @pytest.mark.integration

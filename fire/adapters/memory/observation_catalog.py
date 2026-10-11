@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import threading
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
 
+from fire.core.domain.baseline import Baseline, DriftPolicy
 from fire.core.domain.dossier import Shape
 from fire.core.domain.observation import (
     Channel,
@@ -28,6 +30,7 @@ class _Fingerprint:
 class _Stream:
     channel: Channel
     fingerprints: dict[str, _Fingerprint] = field(default_factory=dict)
+    baseline: Baseline = field(default_factory=Baseline)
 
 
 @dataclass(frozen=True)
@@ -46,10 +49,15 @@ class _IndexEntry:
 
 
 class MemoryObservationCatalog:
-    """Thread-safe: one lock covers every read and write."""
+    """Thread-safe: one lock covers every read and write.
 
-    def __init__(self) -> None:
+    `policies` maps a system to its drift policy; a system it does not name gets the defaults.
+    """
+
+    def __init__(self, policies: Mapping[str, DriftPolicy] | None = None) -> None:
         self._lock = threading.Lock()
+        self._policies = dict(policies or {})
+        self._default_policy = DriftPolicy()
         self._index: dict[tuple[str, str, str], _IndexEntry] = {}
         self._spans: dict[tuple[str, str, str], SpanObservation] = {}
         self._streams: dict[str, dict[tuple[str, str], _Stream]] = {}
@@ -84,6 +92,7 @@ class MemoryObservationCatalog:
                 seen.observations += 1
                 seen.first_observed_at = min(seen.first_observed_at, observed_at)
                 seen.last_observed_at = max(seen.last_observed_at, observed_at)
+            stream.baseline.fold(schema_hash, observation.shape)
             return True
 
     def add_span(self, observation: SpanObservation) -> bool:
@@ -94,12 +103,15 @@ class MemoryObservationCatalog:
             return True
 
     def streams(self, system: str) -> list[StreamSummary]:
+        policy = self._policies.get(system, self._default_policy)
         with self._lock:
             streams = sorted(self._streams.get(system, {}).items(), key=lambda item: item[0])
             return [
                 StreamSummary(
                     source=source,
                     channel=stream.channel,
+                    status=stream.baseline.status(policy),
+                    samples=stream.baseline.samples,
                     fingerprints=sorted(
                         (
                             FingerprintSummary(

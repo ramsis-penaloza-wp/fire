@@ -144,6 +144,67 @@ def test_sample_rate_is_in_zero_one(sample_rate: float) -> None:
         SystemConfig.model_validate(_minimal(fingerprinting={"sample_rate": sample_rate}))
 
 
+DRIFT = {"min_samples": 20, "required_ratio": 1.0}
+
+
+@pytest.mark.unit
+def test_drift_defaults_when_absent() -> None:
+    drift = SystemConfig.model_validate(_minimal()).drift
+    assert (drift.min_samples, drift.required_ratio) == (20, 1.0)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("drift", "expected"),
+    [
+        ({"min_samples": 5, "required_ratio": 0.9}, (5, 0.9)),
+        ({"min_samples": 5}, (5, 1.0)),
+        ({"required_ratio": 0.5}, (20, 0.5)),
+        ({}, (20, 1.0)),
+    ],
+    ids=["both", "min-samples-only", "ratio-only", "empty"],
+)
+def test_drift_loads_from_yaml(
+    tmp_path: Path, drift: dict[str, Any], expected: tuple[int, float]
+) -> None:
+    config = load_system_config(_write(tmp_path, "example.yml", _minimal(drift=drift)))
+    assert (config.drift.min_samples, config.drift.required_ratio) == expected
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [("min_samples", 0), ("required_ratio", 0), ("required_ratio", 1.5)],
+    ids=["min-samples-zero", "ratio-zero", "ratio-above-one"],
+)
+def test_drift_rejects_out_of_range_values(key: str, value: float) -> None:
+    with pytest.raises(ValidationError) as caught:
+        SystemConfig.model_validate(_minimal(drift={key: value}))
+    assert [error["loc"] for error in caught.value.errors()] == [("drift", key)]
+
+
+@pytest.mark.unit
+def test_drift_rejects_unknown_keys() -> None:
+    with pytest.raises(ValidationError) as caught:
+        SystemConfig.model_validate(_minimal(drift={**DRIFT, "window": 5}))
+    assert [error["loc"] for error in caught.value.errors()] == [("drift", "window")]
+
+
+@pytest.mark.unit
+def test_omg_declares_its_drift_policy() -> None:
+    assert yaml.safe_load((SYSTEMS / "omg.yml").read_text())["drift"] == DRIFT
+    drift = load_system_configs(SYSTEMS)["omg"].drift
+    assert (drift.min_samples, drift.required_ratio) == (20, 1.0)
+
+
+@pytest.mark.unit
+def test_template_declares_a_drift_policy() -> None:
+    raw = yaml.safe_load(TEMPLATE.read_text())
+    assert raw["drift"] == DRIFT
+    drift = SystemConfig.model_validate(raw).drift
+    assert (drift.min_samples, drift.required_ratio) == (20, 1.0)
+
+
 CAPTURE = {"prefix": "partner-payloads/", "label": "partner", "layout": "work_unit_action"}
 
 # One valid source per kind, with the env var that names what it reads.
