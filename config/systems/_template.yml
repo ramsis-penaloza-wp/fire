@@ -1,13 +1,33 @@
-# Copy to config/systems/<system>.yml — per-system variability lives here, not in core.
+# Copy to config/systems/<system>.yml (file name must equal `system`).
+# This file holds what a person decides: where to look and which rules apply.
+# What the system contains (events, processors, ingress) is discovered, never listed here.
+# Contract: docs/specs/system-config-and-discovery.md
 system: example
 display_name: Example System
-team_channel: "#example-incidents"
 
-# Shape fingerprint sources (no raw values stored).
+notify:
+  slack:
+    channel_id: C0123456789          # required; public C…, private G…; survives renames
+    channel_name: "#example-incidents"  # optional, display only
+
+# Where the system describes itself. Omit `manifest` for observation-only mode.
+discovery:
+  manifest:
+    kind: event_chains_graph         # parser for the manifest format
+    path_env: EXAMPLE_MANIFEST_PATH  # env var holding the manifest file path
+
+# Where the tentacle reads from (not consumed yet).
+sources:
+  - kind: kinesis
+    stream_env: EXAMPLE_EVENTS_STREAM
+    regions: [us-east-1, us-west-2]
+    dedupe_key: work_unit_id         # same event published in several regions
+
+# Exceptions only. Each name must be declared or observed, or the coverage audit flags it.
+policy:
+  critical: []                       # events whose drift always matters
+  ignore: []                         # known noise, left out of coverage gaps
+
+# Shape fingerprint sampling (no raw values stored).
 fingerprinting:
   sample_rate: 0.02
-  sources: []
-
-# Process-path hints for collectors (wired in later milestones).
-process_path:
-  services: []

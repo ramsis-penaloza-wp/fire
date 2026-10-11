@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
+from fire.adapters.manifests.event_chains_graph import EventChainsGraphParser
 from fire.adapters.narrators.template import TemplateNarrator
 from fire.adapters.notifiers.console import ConsoleNotifier
 from fire.adapters.reasoners.echo import EchoReasoner
 from fire.adapters.shapes.sha256 import Sha256ShapeFingerprinter
-from fire.apps.config import FireConfig, load_fire_config
+from fire.apps.config import FireConfig, SystemConfig, load_fire_config, load_system_configs
+from fire.apps.discovery import Discovery, check_manifest_kinds, discover
+from fire.core.ports.manifest_parser import ManifestParser
 from fire.core.ports.shape_fingerprinter import ShapeFingerprinter
 from fire.core.services.diagnosis import DiagnosisService
 
@@ -21,10 +24,18 @@ class Container:
     config: FireConfig
     diagnosis: DiagnosisService
     fingerprinter: ShapeFingerprinter
+    systems: dict[str, SystemConfig] = field(default_factory=dict)
+    discoveries: dict[str, Discovery] = field(default_factory=dict)
+
+
+def manifest_parsers() -> dict[str, ManifestParser]:
+    parser = EventChainsGraphParser()
+    return {parser.kind: parser}
 
 
 def build_container(config_path: Path | None = None) -> Container:
-    config = load_fire_config(config_path or DEFAULT_CONFIG)
+    config_path = config_path or DEFAULT_CONFIG
+    config = load_fire_config(config_path)
 
     if config.reasoner.provider != "echo":
         raise ValueError(
@@ -42,9 +53,19 @@ def build_container(config_path: Path | None = None) -> Container:
             "(use console; slack comes next)"
         )
 
+    systems = load_system_configs(config_path.parent / "systems")
+    parsers = manifest_parsers()
+    check_manifest_kinds(systems, parsers)
+
     diagnosis = DiagnosisService(
         reasoner=EchoReasoner(),
         narrator=TemplateNarrator(),
         notifier=ConsoleNotifier(),
     )
-    return Container(config=config, diagnosis=diagnosis, fingerprinter=Sha256ShapeFingerprinter())
+    return Container(
+        config=config,
+        diagnosis=diagnosis,
+        fingerprinter=Sha256ShapeFingerprinter(),
+        systems=systems,
+        discoveries={name: discover(system, parsers) for name, system in systems.items()},
+    )
