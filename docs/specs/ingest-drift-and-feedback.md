@@ -1,8 +1,8 @@
 # Ingest, drift, and feedback
 
-**Status:** phase 0 and [Baseline](#baseline) (roadmap step 2.1) are the contract of the shipped
-code. Phase 1 lives in the specs its sections link to, each with its own status; the rest of
-phases 2 to 4 is a proposal.
+**Status:** phase 0, [Baseline](#baseline) (roadmap step 2.1), and [Drift rules](#drift-rules)
+(step 2.2) are the contract of the shipped code. Phase 1 lives in the specs its sections link
+to, each with its own status; the rest of phases 2 to 4 is a proposal.
 
 This is the route from today's engine, which only diagnoses what a caller posts to
 `POST /v0/diagnose`, to an engine that watches a system on its own, detects shape drift,
@@ -123,8 +123,9 @@ learns a path per entry operation, and attaches shapes to their spans.
 ### Baseline
 
 Per stream key, the catalog keeps a `Baseline` (`fire/core/domain/baseline.py`): what the
-observations folded so far carried. It holds paths, value types, and schema hashes, never
-values. It is a dataclass, not a wire model: `/streams` shows only its `status` and `samples`
+observations folded so far carried, and its drift signals. It holds paths, value types, schema
+hashes, counts, and observation times, never values. It is a dataclass, not a wire model:
+`/streams` shows only its `status`, `samples`, and `signals`, as `drift`
 ([Streams endpoint](observations.md#streams-endpoint)).
 
 | Field | Holds |
@@ -132,19 +133,20 @@ values. It is a dataclass, not a wire model: `/streams` shows only its `status` 
 | `samples` | The number of observations folded in |
 | `presence` | Per `(path, value_type)`, how many folded observations carried it; a shape that lists one pair twice counts once |
 | `fingerprints` | The schema hashes folded so far |
+| `signals` | One `DriftSignal` per drifted schema hash ([Drift rules](#drift-rules)); a drifted fingerprint is never folded |
 
-The catalog folds each shape it stores into the baseline of its stream key, in the same atomic
-step that stores it ([ObservationCatalog](observations.md#observationcatalog)). A duplicate
-folds nothing.
+The catalog admits each shape it stores to the baseline of its stream key, in the same atomic
+step that stores it ([ObservationCatalog](observations.md#observationcatalog)): the shape
+folds, or counts on a drift signal ([Drift rules](#drift-rules)). A duplicate changes nothing.
 
 Until `samples` reaches the system's `drift.min_samples`, the stream's status is
 `baseline rebuilding` and it raises no drift; from then on it is `warm` (`BaselineStatus`).
 This is the honest-degradation rule: no baseline, no drift claims.
 
 A fingerprint seen before skips comparison: `Baseline.compares(schema_hash, policy)` is true
-only on a warm baseline, for a fingerprint it has not folded. A known fingerprint still folds
-again, so `presence` counts observations, not fingerprints. The comparison itself comes with
-step 2.2 ([Drift rules](#drift-rules)); until then every stored shape folds.
+only on a warm baseline, for a fingerprint it has not folded. A folded fingerprint folds
+again, so `presence` counts observations, not fingerprints. A compared fingerprint folds only
+when no drift rule fires for it ([Drift rules](#drift-rules)).
 
 `MemoryObservationCatalog` keeps the baselines in process memory, so after a restart every
 stream starts again in `baseline rebuilding`.
@@ -156,7 +158,7 @@ optional, unknown keys are rejected, and a system without it gets the defaults. 
 | Key | Type | Bounds | Default | Meaning |
 |-----|------|--------|---------|---------|
 | `min_samples` | `int` | `1` or more | `20` | Observations folded before a stream is warm |
-| `required_ratio` | `float` | In `(0, 1]`, finite | `1.0` | Share of samples that makes a `(path, value_type)` required; the `removed` rule reads it (step 2.2) |
+| `required_ratio` | `float` | In `(0, 1]`, finite | `1.0` | Share of samples that makes a `(path, value_type)` required; the `removed` rule reads it ([Drift rules](#drift-rules)) |
 
 ```yaml
 drift:
@@ -166,21 +168,99 @@ drift:
 
 ### Drift rules
 
-A new fingerprint on a warm stream is compared with the baseline:
+When the baseline compares a fingerprint ([Baseline](#baseline)), `Baseline.diff(shape, policy)`
+checks the shape against it. The rules read `presence` only: a path or a value type the stream
+saw is one that some folded sample carried.
 
 | Change | Rule | Reported as |
 |--------|------|-------------|
-| Field added | `(path, value_type)` never seen on this stream | `added` |
-| Type changed | `path` seen before, but never with this `value_type` | `type_changed` (old and new types) |
-| Field removed | carried by at least `drift.required_ratio` of samples, absent now | `removed` |
+| Field added | The shape carries a `(path, value_type)` whose `path` the stream never saw | `added`, one `FieldRef` per pair |
+| Type changed | The shape carries a `path` the stream saw, with a `value_type` never seen at that path | `type_changed`, one `TypeChange` per path, with `old` and `new` types |
+| Field removed | A `(path, value_type)` with `presence / samples >= drift.required_ratio` is absent from the shape, and its `path` is not in `type_changed` | `removed`, one `FieldRef` per pair |
+
+The models are in `fire/core/domain/drift.py` and reject unknown fields. They name paths and
+value types, never values.
+
+| Model | Holds |
+|-------|-------|
+| `FieldRef` | `path` and `value_type` |
+| `TypeChange` | `path`; `old`, every value type the baseline saw at the path; `new`, the shape's value types there that the baseline never saw. Both are non-empty and sorted |
+| `ShapeDiff` | `added`, `type_changed`, and `removed`, each sorted by path, then value type; `is_empty` is true when all three are empty |
+| `DriftSignal` | `schema_hash`, `diff`, `occurrences` (`1` or more), and the timezone-aware `first_seen` and `last_seen` |
+| `Admission` | `duplicate`, `folded`, `drift_raised`, `drift_repeated` |
+| `ShapeAdmission` | `outcome`, an `Admission`; `signal`, set on the two drift outcomes and on no other; `stored`, a property, true on every outcome but `duplicate` |
+
+A path in `type_changed` is not also reported as removed: OMG's `referenceOrderId` sent as an
+integer instead of a string is one type change, not a type change and a removed `string`. A
+required pair is still reported as removed when the shape carries its path only with another
+type the stream already saw. With `required_ratio: 0.9`, a `discount` that was an `integer` in
+95% of samples and `null` in the rest is reported removed, as `integer`, for a shape where it
+is `null`.
+
+The ratio is absolute: a pair's `presence` over all of the stream's `samples`, compared as
+`presence / samples >= required_ratio`. At the default `1.0`, a pair is required only when
+every sample carried it. `cardinality` and `optional` are not compared, so a new fingerprint
+that differs from the baseline only in them has an empty diff. Open question 7 lists what the
+absolute ratio does not cover, and open question 8 how `null` is judged.
 
 Comparing fingerprints alone is not enough: a payload with an optional key present and one
-without it have different fingerprints but the same form. A new fingerprint with no added,
-changed, or removed field is folded into the baseline silently.
+without it have different fingerprints but the same form. A new fingerprint with an empty diff
+folds into the baseline silently.
 
-A drifted fingerprint is not folded into the baseline. It becomes one drift signal per
-`(stream key, fingerprint)` with a first-seen time and an occurrence count, and it notifies
-once. Acknowledging a drift so it joins the baseline is phase 4 feedback.
+`Baseline.admit(schema_hash, shape, observed_at, policy)` decides what a stored shape does to
+the baseline. The catalog calls it under its lock, in the same step that stores the
+observation, and `add_shape` returns the `ShapeAdmission`
+([ObservationCatalog](observations.md#observationcatalog)). The first case that matches
+decides:
+
+| Case | Effect | `outcome` |
+|------|--------|-----------|
+| The dedupe key is known; the catalog checks this before `admit` | Nothing changes, so no occurrence is added | `duplicate` |
+| The fingerprint has a signal | Adds an occurrence; not folded | `drift_repeated` |
+| The baseline compares the fingerprint and the diff is not empty | Opens a signal with one occurrence; not folded | `drift_raised` |
+| Anything else | Folds | `folded` |
+
+The last case covers a stream below `min_samples`, where nothing is compared, the observation
+that brings it to `min_samples` included; a folded fingerprint, which folds again without
+comparison; and a new fingerprint with an empty diff, which is optional-key variation. A drift
+outcome carries the signal as that occurrence left it.
+
+A drifted fingerprint becomes one `DriftSignal` per `(stream key, fingerprint)`, kept in
+`Baseline.signals`. Its `diff` is the one computed for the occurrence that opened it.
+`occurrences` counts the stored observations with that fingerprint, and `first_seen` and
+`last_seen` are the earliest and latest `observed_at` among them, whatever the arrival order. A
+drifted fingerprint is never folded and stays drifted; acknowledging a drift so it joins the
+baseline is phase 4 feedback.
+
+`/streams` lists a stream's open signals under `drift`, sorted by `first_seen`, then
+`schema_hash` ([Streams endpoint](observations.md#streams-endpoint)). In the L1 test, a warm
+`http:inbound:POST /v1/orders/place_order:request` stream receives OMG's place-order request
+100 times with `timezone` removed and `referenceOrderId` sent as an integer. That is one
+signal:
+
+```json
+{"schema_hash": "c47d…",
+ "diff": {"added": [],
+          "type_changed": [{"path": "referenceOrderId", "old": ["string"],
+                            "new": ["integer"]}],
+          "removed": [{"path": "timezone", "value_type": "string"}]},
+ "occurrences": 100,
+ "first_seen": "2026-10-11T16:30:21Z", "last_seen": "2026-10-11T16:32:00Z"}
+```
+
+A signal notifies once. `IngestService` takes an `on_drift` hook (`DriftHook`), called with the
+observation that raised a signal and the signal, once per new signal, after the whole batch is
+counted, in batch order. A later occurrence calls nothing. Until step 2.4 replaces the hook
+with opening an incident ([Drift incidents](#drift-incidents)), the body wires `log_drift`
+(`fire/apps/incident_engine/wiring.py`), which logs one `INFO` line per new signal:
+
+```
+shape drift raised: system=<system> source=<source> stream=<channel key> fingerprint=<schema_hash> added=<n> type_changed=<n> removed=<n>
+```
+
+The line carries names and counts only, never paths, because a path can hold data
+([observations.md, open question 1](observations.md#open-questions)). The L1 scenario logs one
+line, with `added=0 type_changed=1 removed=1`.
 
 `drift.min_samples` and `drift.required_ratio` are set per system ([Baseline](#baseline)).
 
@@ -212,8 +292,8 @@ the demo.
 
 ### Read endpoints
 
-`GET /v0/systems/{system}/streams` lists each stream key with its `status` and `samples`
-(step 2.1); open drift signals come with step 2.2. Both read endpoints require `X-FIRE-Token`.
+`GET /v0/systems/{system}/streams` lists each stream key with its `status`, `samples`, and open
+drift signals (steps 2.1 and 2.2). Both read endpoints require `X-FIRE-Token`.
 
 ### Demo
 
@@ -280,7 +360,8 @@ and `ShapeRecord` with `ObservationCatalog`, removed `OriginRegistry`, and added
 `sources[].id` ([Migration](observations.md#migration)). Step 1.3 replaced `dedupe_key` with
 `envelope`, added the source kinds and `kind: replay`, and applies `sample_rate` in the tentacle
 ([Migration](tentacle.md#migration)). Step 2.1 gave `ObservationCatalog` a baseline per stream
-key ([Baseline](#baseline)).
+key ([Baseline](#baseline)). Step 2.2 made `add_shape` return a `ShapeAdmission` instead of a
+`bool` and gave `IngestService` its `on_drift` hook ([Drift rules](#drift-rules)).
 
 ## Open questions
 
@@ -292,3 +373,12 @@ key ([Baseline](#baseline)).
    FIRE keeps the dataset and exports it.
 5. `undefined` next to `pending`: whether `partial` names the middle grade more clearly.
 6. Which Kinesis environment and stream the demo reads, and from where in the stream.
+7. The `removed` ratio is absolute, so it misjudges nested fields. A child of an optional object
+   is never required at the default `1.0`: with `customer` present in half the samples,
+   `customer.email` reaches at most `0.5`, even when every `customer` carried it. A new empty
+   array reports its element paths as removed: `lines: []` carries no `lines[*]` fields, so each
+   required one is reported. Whether presence should be relative to the parent, as `optional` is
+   in the generalizer ([Optional keys](shape-generalizer.md#optional-keys)).
+8. A field that was never `null` and arrives `null` is a type change (`old: ["string"]`,
+   `new: ["null"]`). Whether `null` should count as a type change, or as an absent value that
+   only the `removed` rule judges.

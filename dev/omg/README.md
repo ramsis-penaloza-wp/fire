@@ -281,7 +281,9 @@ jq 'del(.timezone) | .referenceOrderId = 12345 | .checkoutId = "firedrift"' \
 ```
 
 OMG rejects it. Expect exactly one console notification in `/tmp/fire-body.log` naming the
-request channel, the removed `timezone`, and the type change of `referenceOrderId`. The `4xx`
+request channel, the removed `timezone`, and the type change of `referenceOrderId`. With steps
+2.1 and 2.2 alone, the body logs one `shape drift raised` line there instead, with counts only,
+and `/streams` lists the signal, with both paths, under the stream's `drift`. The `4xx`
 response opens a new stream in `baseline rebuilding` and raises nothing. Posting the same
 payload again adds an occurrence to the signal, not a second notification.
 
