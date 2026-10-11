@@ -352,14 +352,28 @@ rm -f /tmp/fire-body.log /tmp/fire-tentacle.log /tmp/fire-canary-order.json
   variable wins over `.env`. A `503` means the body has no token.
 - **500 from `place_order` with `NoSuchBucket` `federation` in the API's log.** OMG's compose
   sets `AWS_ENDPOINT_URL` for the whole API container, so botocore sends the SSO credential
-  call (`GetRoleCredentials`, needed for the stage catalog read) to LocalStack. Without editing
-  OMG, run `aws sso login --profile <your-profile>`, then recreate only the API with an
-  override outside both repos that sets `AWS_ENDPOINT_URL_SSO:
-  https://portal.sso.us-east-1.amazonaws.com` and `AWS_ENDPOINT_URL_SSO_OIDC:
-  https://oidc.us-east-1.amazonaws.com` on `order-management-api`, passed as one more `-f` to
-  `docker compose --profile omg -f docker-compose.yml -f docker-compose.local.yml … up -d
-  --no-deps order-management-api`. The `500` still crosses the proxy: it gives a `response:5xx`
-  stream, and its trace still joins. After each such `500`, OMG closes the keep-alive
+  call (`GetRoleCredentials`, needed for the stage catalog read) to LocalStack, and
+  `aws sso login` alone does not help. Without editing OMG, log in, then recreate only the API
+  with an override outside both repos that sends SSO calls back to AWS:
+
+  ```bash
+  aws sso login --profile <your-profile>
+  cat > ~/omg-sso.override.yml <<'EOF'
+  services:
+    order-management-api:
+      environment:
+        AWS_ENDPOINT_URL_SSO: https://portal.sso.us-east-1.amazonaws.com
+        AWS_ENDPOINT_URL_SSO_OIDC: https://oidc.us-east-1.amazonaws.com
+  EOF
+  cd "$OMG_REPO"
+  docker compose -f docker-compose.yml -f docker-compose.local.yml -f ~/omg-sso.override.yml \
+    --profile omg up -d --no-deps order-management-api
+  ```
+
+  `make docker/up/omg` recreates the API without the override; run the last command again
+  after it. When the SSO session expires, log in again. Until fixed, the `500` still crosses
+  the proxy: it gives a `response:5xx` stream, and its trace still joins. After each such
+  `500`, OMG closes the keep-alive
   connection a few milliseconds later without `Connection: close`, so the next request sent on
   it is lost: a direct client gets a connection error, and through the proxy it gets `502` with
   `x-fire-proxy: upstream-aborted` and counts `upstream_aborted`. The proxy does not retry,
