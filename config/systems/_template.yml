@@ -16,13 +16,20 @@ discovery:
     kind: event_chains_graph         # parser for the manifest format
     path_env: EXAMPLE_MANIFEST_PATH  # env var holding the manifest file path
 
-# Where the tentacle reads from (not consumed yet).
+# Where the tentacle reads. Kinds: replay, kinesis, dynamodb_stream, sns_fanout, s3_capture.
+# Contract: docs/specs/tentacle.md#sources-in-the-system-yaml
 sources:
   - id: domain-events                # the observations' `source`; unique within the system
     kind: kinesis
-    stream_env: EXAMPLE_EVENTS_STREAM
+    direction: internal              # internal: the system's own events; inbound: external
+    stream_env: EXAMPLE_EVENTS_STREAM  # env var holding the stream name
     regions: [us-east-1, us-west-2]
-    dedupe_key: work_unit_id         # same event published in several regions
+    envelope:                        # dotted paths into each record
+      event_id: work_unit_id         # one event read from several regions counts once
+      event_type: event_type         # the channel name
+      occurred_at: metadata.timestamp  # ISO 8601, or {path: ts, epoch: ms}
+      work_id: work_unit_id          # optional; joins events, captures, and outcomes
+      payload: payload               # the value generalized into a shape
 
 # Exceptions only. Each name must be declared or observed, or the coverage audit flags it.
 policy:

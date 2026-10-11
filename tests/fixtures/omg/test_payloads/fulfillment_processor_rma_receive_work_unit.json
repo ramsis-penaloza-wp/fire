@@ -1,0 +1,36 @@
+{
+  "work_unit_id": "wu-rma-receive-a641ea0bedcd",
+  "source": "sqs",
+  "domain": "fulfillment",
+  "event_type": "fulfillment.receive",
+  "payload": {
+    "transaction_id": "TX-RMA-TJHHNFG000-25b78b",
+    "created_timestamp": "2026-07-11T00:25:43.203539+00:00",
+    "event": "rma_receive",
+    "event_timestamp": "2026-07-11T00:25:43.203539+00:00",
+    "facility": "RGRN",
+    "receipt_type": "RMA",
+    "return_id": "TJHHNFG000",
+    "wms_source": "manhattan",
+    "lines": [
+      {
+        "pc_product_id": 19000091,
+        "quantity": 1,
+        "return_item_id": "RMAHHNFG000"
+      }
+    ]
+  },
+  "metadata": {
+    "timestamp": "2026-07-11T00:25:43.203539+00:00",
+    "correlation_id": "corr-rma-receive-520c5b2f648a",
+    "priority": "normal",
+    "region": "us-east-1",
+    "routing": {
+      "business_event_type": "fulfillment.receive",
+      "target_domains": [
+        "fulfillment"
+      ],
+      "triggered_by": "manual:prepare_exchange_rma_receive"
+    }
+  }
+}

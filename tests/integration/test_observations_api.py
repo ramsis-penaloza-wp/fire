@@ -75,7 +75,19 @@ def _write_system(directory: Path, system: str, source_ids: list[str]) -> None:
         "display_name": system.title(),
         "notify": {"slack": {"channel_id": "C0123456789"}},
         "sources": [
-            {"id": source_id, "kind": "kinesis", "stream_env": "S", "regions": ["us-east-1"]}
+            {
+                "id": source_id,
+                "kind": "kinesis",
+                "direction": "internal",
+                "stream_env": "S",
+                "regions": ["us-east-1"],
+                "envelope": {
+                    "event_id": "id",
+                    "event_type": "type",
+                    "occurred_at": "at",
+                    "payload": "data",
+                },
+            }
             for source_id in source_ids
         ],
     }

@@ -1,0 +1,28 @@
+{
+  "work_unit_id": "wu-manual-fulfillment-allocated-001",
+  "source": "dynamodb",
+  "domain": "fulfillment",
+  "event_type": "fulfillment.allocated",
+  "payload": {
+    "order_id": "manual-test-charge-order-001",
+    "allocated_items": [
+      {
+        "item_id": "item-line-1",
+        "fulfillment_request_id": "fr-test-001",
+        "facility_short_name": "LAB1",
+        "ship_set_id": "manual-test-charge-order-001"
+      }
+    ]
+  },
+  "metadata": {
+    "timestamp": "2025-03-23T12:00:00+00:00",
+    "correlation_id": "corr-manual-fulfillment-allocated-001",
+    "priority": "normal",
+    "region": "us-east-1",
+    "routing": {
+      "business_event_type": "fulfillment.allocated",
+      "target_domains": ["fulfillment"],
+      "triggered_by": "manual:test_payload"
+    }
+  }
+}

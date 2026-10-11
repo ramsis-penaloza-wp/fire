@@ -9,10 +9,19 @@ import pytest
 import yaml
 from pydantic import ValidationError
 
-from fire.apps.config import SystemConfig, load_system_config, load_system_configs
+from fire.apps.config import (
+    EventSourceConfig,
+    ReplaySourceConfig,
+    S3CaptureSourceConfig,
+    SystemConfig,
+    load_system_config,
+    load_system_configs,
+)
+from fire.core.domain.observation import ChannelDirection
 
 SYSTEMS = Path(__file__).resolve().parents[2] / "config" / "systems"
 TEMPLATE = SYSTEMS / "_template.yml"
+ENVELOPE = {"event_id": "id", "event_type": "type", "occurred_at": "at", "payload": "data"}
 
 
 def _minimal(**overrides: Any) -> dict[str, Any]:
@@ -36,15 +45,40 @@ def test_template_is_a_valid_system_config() -> None:
     config = SystemConfig.model_validate(yaml.safe_load(TEMPLATE.read_text()))
     assert config.notify.slack.channel_id == "C0123456789"
     assert config.discovery.manifest is not None
-    assert config.sources[0].id == "domain-events"
-    assert config.sources[0].dedupe_key == "work_unit_id"
+    [source] = config.sources
+    assert source.id == "domain-events"
+    assert source.kind == "kinesis"
+    assert isinstance(source, EventSourceConfig)
+    assert source.envelope.event_id.path == "work_unit_id"
 
 
 @pytest.mark.unit
 def test_repo_system_configs_are_valid() -> None:
     configs = load_system_configs(SYSTEMS)
     assert "omg" in configs
-    assert configs["omg"].source_ids() == {"domain-events"}
+    assert configs["omg"].source_ids() == {
+        "domain-events",
+        "order-domain-events",
+        "rx-updates",
+        "carrier-events",
+        "financials-events",
+        "transmissions",
+        "work-unit-samples",
+    }
+
+
+@pytest.mark.unit
+def test_omg_replays_work_units_through_their_envelope() -> None:
+    sources = {source.id: source for source in load_system_configs(SYSTEMS)["omg"].sources}
+    replay = sources["work-unit-samples"]
+    assert isinstance(replay, ReplaySourceConfig)
+    assert replay.direction is ChannelDirection.INTERNAL
+    assert replay.location_env == "OMG_REPLAY_PATH"
+    envelope = replay.envelope
+    assert envelope.work_id is not None
+    assert envelope.event_id.path == envelope.work_id.path == "work_unit_id"
+    assert envelope.occurred_at.path == "metadata.timestamp"
+    assert envelope.correlation_id is None
 
 
 @pytest.mark.unit
@@ -110,13 +144,51 @@ def test_sample_rate_is_in_zero_one(sample_rate: float) -> None:
         SystemConfig.model_validate(_minimal(fingerprinting={"sample_rate": sample_rate}))
 
 
-def _source(**overrides: Any) -> dict[str, Any]:
-    source: dict[str, Any] = {
-        "id": "events",
-        "kind": "kinesis",
-        "stream_env": "S",
-        "regions": ["us-east-1"],
-    }
+CAPTURE = {"prefix": "partner-payloads/", "label": "partner", "layout": "work_unit_action"}
+
+# One valid source per kind, with the env var that names what it reads.
+SOURCES: dict[str, tuple[dict[str, Any], str]] = {
+    "replay": (
+        {"kind": "replay", "direction": "internal", "path_env": "P", "envelope": ENVELOPE},
+        "P",
+    ),
+    "kinesis": (
+        {
+            "kind": "kinesis",
+            "direction": "internal",
+            "stream_env": "S",
+            "regions": ["us-east-1"],
+            "envelope": ENVELOPE,
+        },
+        "S",
+    ),
+    "dynamodb_stream": (
+        {
+            "kind": "dynamodb_stream",
+            "direction": "internal",
+            "table_env": "T",
+            "regions": ["us-east-1"],
+            "filter": {"attribute": "status", "equals": "ABANDONED"},
+            "envelope": ENVELOPE,
+        },
+        "T",
+    ),
+    "sns_fanout": (
+        {
+            "kind": "sns_fanout",
+            "direction": "inbound",
+            "topic_env": "N",
+            "regions": ["us-east-1"],
+            "envelope": ENVELOPE,
+        },
+        "N",
+    ),
+    "s3_capture": ({"kind": "s3_capture", "bucket_env": "B", "captures": [CAPTURE]}, "B"),
+}
+
+
+def _source(kind: str = "kinesis", **overrides: Any) -> dict[str, Any]:
+    source: dict[str, Any] = {"id": "events", **SOURCES[kind][0]}
     source.update(overrides)
     return source
 
@@ -128,15 +200,108 @@ def _source_error_locs(*sources: dict[str, Any]) -> list[tuple[str | int, ...]]:
 
 
 @pytest.mark.unit
-def test_kinesis_source_needs_a_region() -> None:
-    assert _source_error_locs(_source(regions=[])) == [("sources", 0, "regions")]
+@pytest.mark.parametrize("kind", sorted(SOURCES))
+def test_each_source_kind_loads_and_names_its_env_var(kind: str) -> None:
+    [source] = SystemConfig.model_validate(_minimal(sources=[_source(kind)])).sources
+    assert source.kind == kind
+    assert source.location_env == SOURCES[kind][1]
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("kind", sorted(SOURCES))
+def test_source_rejects_unknown_keys(kind: str) -> None:
+    assert _source_error_locs(_source(kind, extra="x")) == [("sources", 0, kind, "extra")]
+
+
+@pytest.mark.unit
+def test_unknown_source_kind_is_rejected() -> None:
+    assert _source_error_locs({**_source(), "kind": "kafka"}) == [("sources", 0)]
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("kind", sorted(SOURCES))
+def test_dedupe_key_fails_naming_envelope_event_id(kind: str) -> None:
+    with pytest.raises(ValidationError, match=r"dedupe_key was removed.*envelope\.event_id"):
+        SystemConfig.model_validate(_minimal(sources=[_source(kind, dedupe_key="id")]))
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("kind", ["kinesis", "dynamodb_stream", "sns_fanout"])
+def test_regional_source_needs_a_region(kind: str) -> None:
+    assert _source_error_locs(_source(kind, regions=[])) == [("sources", 0, kind, "regions")]
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("kind", ["replay", "kinesis", "dynamodb_stream", "sns_fanout"])
+@pytest.mark.parametrize("key", ["direction", "envelope"])
+def test_event_source_needs_direction_and_envelope(kind: str, key: str) -> None:
+    source = _source(kind)
+    del source[key]
+    assert _source_error_locs(source) == [("sources", 0, kind, key)]
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("kind", ["replay", "kinesis", "dynamodb_stream", "sns_fanout"])
+def test_event_source_is_never_outbound(kind: str) -> None:
+    locs = _source_error_locs(_source(kind, direction="outbound"))
+    assert locs == [("sources", 0, kind, "direction")]
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("key", ["direction", "envelope"])
+def test_s3_capture_takes_no_direction_or_envelope(key: str) -> None:
+    value = ENVELOPE if key == "envelope" else "outbound"
+    locs = _source_error_locs(_source("s3_capture", **{key: value}))
+    assert locs == [("sources", 0, "s3_capture", key)]
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("capture", "loc"),
+    [
+        ({**CAPTURE, "label": "Partner"}, ("captures", 0, "label")),
+        ({**CAPTURE, "layout": "by_order"}, ("captures", 0, "layout")),
+        ({**CAPTURE, "prefix": ""}, ("captures", 0, "prefix")),
+        ({**CAPTURE, "order_id": "x"}, ("captures", 0, "order_id")),
+    ],
+    ids=["label", "layout", "prefix", "unknown-key"],
+)
+def test_s3_capture_checks_each_capture(capture: dict[str, Any], loc: tuple[Any, ...]) -> None:
+    locs = _source_error_locs(_source("s3_capture", captures=[capture]))
+    assert locs == [("sources", 0, "s3_capture", *loc)]
+
+
+@pytest.mark.unit
+def test_s3_capture_needs_unique_prefixes() -> None:
+    captures = [CAPTURE, {**CAPTURE, "label": "other"}]
+    with pytest.raises(ValidationError, match="duplicate capture prefixes: partner-payloads/"):
+        SystemConfig.model_validate(_minimal(sources=[_source("s3_capture", captures=captures)]))
+
+
+@pytest.mark.unit
+def test_s3_capture_needs_a_capture() -> None:
+    locs = _source_error_locs(_source("s3_capture", captures=[]))
+    assert locs == [("sources", 0, "s3_capture", "captures")]
+
+
+@pytest.mark.unit
+def test_s3_capture_layouts() -> None:
+    layouts = ["work_unit_action", "work_unit_order_action", "work_unit_order"]
+    captures = [
+        {"prefix": f"{layout}/", "label": "partner", "layout": layout} for layout in layouts
+    ]
+    [source] = SystemConfig.model_validate(
+        _minimal(sources=[_source("s3_capture", captures=captures)])
+    ).sources
+    assert isinstance(source, S3CaptureSourceConfig)
+    assert [capture.layout for capture in source.captures] == layouts
 
 
 @pytest.mark.unit
 def test_source_id_is_required() -> None:
     source = _source()
     del source["id"]
-    assert _source_error_locs(source) == [("sources", 0, "id")]
+    assert _source_error_locs(source) == [("sources", 0, "kinesis", "id")]
 
 
 @pytest.mark.unit
@@ -153,12 +318,12 @@ def test_source_id_accepts_slugs(source_id: str) -> None:
     ids=["empty", "leading-dash", "leading-underscore", "uppercase", "space", "dot", "slash"],
 )
 def test_source_id_rejects_non_slugs(source_id: str) -> None:
-    assert _source_error_locs(_source(id=source_id)) == [("sources", 0, "id")]
+    assert _source_error_locs(_source(id=source_id)) == [("sources", 0, "kinesis", "id")]
 
 
 @pytest.mark.unit
 def test_source_ids_are_unique_within_a_system() -> None:
-    sources = [_source(id="b"), _source(id="a"), _source(id="b"), _source(id="a")]
+    sources = [_source(id="b"), _source("replay", id="a"), _source(id="b"), _source(id="a")]
     with pytest.raises(ValidationError, match="duplicate source ids: a, b"):
         SystemConfig.model_validate(_minimal(sources=sources))
 
