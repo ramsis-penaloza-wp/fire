@@ -1,0 +1,46 @@
+---
+description: Map of the FIRE repo, its specs, and its dependency rule
+alwaysApply: true
+---
+
+# FIRE repo map
+
+FIRE ENGINE (Failure Investigation & Root Explanation) diagnoses incidents in watched systems
+from payload shapes and process paths, never raw values. Hexagonal; the package is `fire/`.
+Rules naming a `panoptes/` package or `config/panoptes.yml` describe Panoptes, another repo,
+and do not apply here.
+
+| Path | What lives there |
+|---|---|
+| `fire/core/domain/` | Pydantic models: `dossier` (`Shape`, `ShapeField`, `ValueType`, `ShapeFingerprint`, `ProcessPath`, `EvidenceFragment`, `Dossier`), `decision` (`Possibility`, `Decision`), `incident`, `narration`, `origin`, `inventory` (`SystemInventory`, `CoverageReport`) |
+| `fire/core/ports/` | Protocols: `Reasoner`, `Narrator`, `Notifier`, `ShapeGeneralizer`, `ShapeFingerprinter`, `ManifestParser`; `ShapeCatalog` and `OriginRegistry` have no adapter |
+| `fire/core/services/` | `DiagnosisService` (reasoner, then narrator, then notifier) and `audit_coverage` |
+| `fire/adapters/shapes/` | `FlatStarShapeGeneralizer` (JSON to `Shape`), `Sha256ShapeFingerprinter` |
+| `fire/adapters/manifests/` | `EventChainsGraphParser` (`event_chains_graph` document to `SystemInventory`) |
+| `fire/adapters/{reasoners,narrators,notifiers}/` | Stubs: `EchoReasoner`, `TemplateNarrator`, `ConsoleNotifier` |
+| `fire/apps/config.py` | YAML to Pydantic: `FireConfig` (`config/fire.yml`), `SystemConfig` (`config/systems/*.yml`) |
+| `fire/apps/discovery.py` | `discover`: per system, an inventory from its manifest or a `missing_reason` |
+| `fire/apps/env.py` | `load_fire_env`: loads `.env`; process env wins |
+| `fire/apps/incident_engine/` | `app.py` (FastAPI: `GET /health`, `POST /v0/diagnose`), `wiring.py` (`build_container`), `__main__.py` |
+| `config/fire.yml` | Global: API token env var, reasoner, narrator, notifier, tier budgets |
+| `config/systems/` | One YAML per watched system; `_template.yml` is skipped. `omg.yml` is OMG, the first |
+| `tests/unit/` | Flat `test_<topic>.py` files |
+
+## Specs
+
+`docs/specs/` holds the contracts. Read the matching spec before changing a module.
+
+| Spec | Covers |
+|---|---|
+| `dossier-and-decision.md` | `core/domain/dossier.py`, `core/domain/decision.py` |
+| `shape-generalizer.md` | `adapters/shapes/flat_star.py` |
+| `system-config-and-discovery.md` | `apps/config.py`, `apps/discovery.py`, `inventory`, `coverage`, `adapters/manifests/` |
+| `ingest-drift-and-feedback.md` | Roadmap: tentacle, observations, drift, triggers, feedback |
+
+## Dependency rule
+
+`core` imports only `pydantic` and the standard library, never `adapters` or `apps`.
+`adapters` import `core`; `apps` import both. Relative imports are banned (ruff `TID`).
+`core` names no watched system: no `omg`, and no OMG event, processor, or service names.
+
+Update this map when a module is added, moved, or removed.

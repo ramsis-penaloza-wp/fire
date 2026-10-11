@@ -1,0 +1,53 @@
+---
+description: FIRE conventions for language, design rules, workflow, and tests
+alwaysApply: true
+---
+
+# FIRE conventions
+
+## Language
+
+Everything is in English: code, comments, docstrings, log and user-facing strings, config
+comments, tests, and docs.
+
+## Design rules to preserve
+
+- **Shapes, never values**: payload evidence is a `Shape` and a `ShapeFingerprint`. No raw
+  payload value reaches a dossier, reasoner, narrator, log line, or store.
+- **Per-system variability lives in config**: onboarding a system means writing
+  `config/systems/<system>.yml`, not code. Parsers and adapters are per format, never per system.
+- **Declared versus discovered**: system YAML holds decisions. Events, processors, and ingress
+  come from the system's manifest and are never listed by hand.
+- **Secrets by reference**: config holds env var names (`*_env`), never values. Every env var
+  that `config/fire.yml` or a real system file names appears in `.env.example`.
+- **202 at T=0**: `POST /v0/diagnose` returns `202` and diagnoses in a background task.
+- **Auth fails closed**: mutating routes need `X-FIRE-Token`; a wrong or missing token is `401`,
+  and an unset server token is `503`.
+- **Honest degradation**: missing evidence is an `EvidenceFragment` with quality `MISSING`, and
+  a missing manifest is a `Discovery.missing_reason`. Never guess or invent evidence.
+- **The reasoner decides, the narrator writes**: a `Reasoner` returns a `Decision` of calibrated
+  possibilities; a `Narrator` turns it into prose and cannot add causes or confidence.
+
+## Workflow
+
+Python 3.13+ and [uv](https://docs.astral.sh/uv/). CI runs the same checks on every PR.
+
+```bash
+make install   # uv sync --group dev
+make fmt       # ruff format
+make lint      # ruff format --check, then ruff check (line length 99)
+make test      # pytest
+make run       # engine on 127.0.0.1:8000 (FIRE_HOST, FIRE_PORT)
+```
+
+Commit, push, or open a pull request only when asked. Repos of watched systems, such as
+`order-management-gateway`, are read for facts and never edited from here.
+
+## Tests and docs
+
+- Mark every test `@pytest.mark.unit`. `--strict-markers` is on, so register a new marker in
+  `pyproject.toml` before using it.
+- New adapters, config keys, and behavior get tests. App tests set
+  `app_module._container = build_container()` and wrap `app` in `TestClient`.
+- Tests never read files outside the repo: write fixtures to `tmp_path` and point env vars at them.
+- A behavior change updates its spec in `docs/specs/` in the same change.
