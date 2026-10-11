@@ -9,21 +9,25 @@ supersedes the [Tentacle](ingest-drift-and-feedback.md#tentacle) and
 of the main spec and the [Sources](system-config-and-discovery.md#sources) section of the
 config spec. OMG is the example throughout; no code names it.
 
-**Status:** roadmap steps 1.3, 1.7, and 1.8 implement it. [Process](#process),
+**Status:** roadmap steps 1.3, 1.6, 1.7, and 1.8 implement it. [Process](#process),
 [Sending to the body](#sending-to-the-body), [Record pipeline](#record-pipeline),
 [Sources in the system YAML](#sources-in-the-system-yaml), [Envelope](#envelope),
 [Privacy](#privacy), and [Canary harness](#canary-harness) are the contract of the shipped code
-(step 1.3), and so is the `replay` kind. The other kinds load and validate in the system YAML,
-but their readers, described in [Kinds](#kinds), are a proposal until steps 1.7 and 1.8.
+(step 1.3), and so are the `replay` kind and the `http_proxy` kind (step 1.6,
+[Inbound proxy](http-and-span-capture.md#inbound-proxy)). The other kinds load and validate in
+the system YAML, but their readers, described in [Kinds](#kinds), are a proposal until steps 1.4,
+1.7, and 1.8.
 
 | Module | Holds |
 |--------|-------|
-| `fire/apps/tentacle/` | `__main__.py` (the CLI), `runner.py` (startup and the run loop), `sender.py`, `counters.py`, `sources.py` (readers by kind) |
+| `fire/apps/tentacle/` | `__main__.py` (the CLI), `runner.py` (startup and the run loop), `sender.py`, `counters.py`, `sources.py` (readers by kind, and `open_http_proxy`) |
 | `fire/core/ports/record_source.py` | `RecordSource`, `RawRecord`, `StartPosition` |
 | `fire/core/services/record_pipeline.py` | `RecordPipeline` and its reason codes |
 | `fire/core/domain/envelope.py` | `Envelope` and its path models |
 | `fire/adapters/sources/replay.py` | `ReplayRecordSource` |
 | `fire/apps/config.py` | `TentacleConfig` and one model per source kind |
+
+The inbound proxy's modules are listed in [Inbound proxy](http-and-span-capture.md#inbound-proxy).
 
 ## Process
 
@@ -39,11 +43,14 @@ python -m fire.apps.tentacle --system omg [--source <id>] [--start latest|oldest
   file, an unknown `--source`, an unset `api.token_env` or `tentacle.body_url_env`, a body URL
   that is not `http` or `https`, a named source that would be skipped, a source whose env var
   names nothing it can read (a `replay` path that is no `.json` or `.jsonl` file and no
-  directory), and no source left to run. Messages name env vars, never their values.
-- A `replay` source ends when its files are read; live sources run until `SIGINT` or
-  `SIGTERM`. `--start latest` (the default) reads what is written after start; `oldest` reads
-  what a source still retains; `replay` ignores it. Positions live in memory, so a restart
-  begins at `--start` and the body's dedupe absorbs the overlap.
+  directory, or an `http_proxy` upstream that is not an `http` or `https` URL), an
+  `http_proxy` whose listen address cannot be bound, and no source left to run. Messages name
+  env vars and listen addresses, never env var values.
+- A `replay` source ends when its files are read; live sources, `http_proxy` included, run
+  until `SIGINT` or `SIGTERM`. `--start latest` (the default) reads what is written after
+  start; `oldest` reads what a source still retains; `replay` and `http_proxy` ignore it.
+  Positions live in memory, so a restart begins at `--start` and the body's dedupe absorbs the
+  overlap.
 - When every source has ended, or on a signal, it stops reading, sends what is pending within
   `shutdown_s`, counts what is still pending as unsent, and logs its counters. Exit code `0`:
   every record was sent, skipped, or rejected with a counted reason; `1`: some observation is
@@ -63,26 +70,32 @@ python -m fire.apps.tentacle --system omg [--source <id>] [--start latest|oldest
 | `shutdown_s` | `10` | Time to drain on shutdown |
 
 - Batches go to `{body URL}/v0/observations` with `X-FIRE-Token`
-  ([observations.md](observations.md#ingest-endpoint)), with a 10 s request timeout. A batch
+  ([observations.md](observations.md#ingest-endpoint)), with a 10 s request timeout. Each
+  observation is posted whole, nulls included: the field of a JSON null has a null
+  `cardinality`, and dropping it would let the body read the default `"1"` and refuse the
+  shape as `fingerprint_mismatch`. A batch
   holds one source's observations, so the body's counts are that source's. A connection
   error, a timeout, `408`, `429`, or a `5xx` is retried; any other status, including `401`, is
   not.
 - A batch that runs out of attempts or is refused is counted as unsent and logged as
   `batch unsent: source=<id> size=<n> status=<HTTP status or exception type> attempts=<n>`. A
-  full buffer pauses reading instead of dropping.
+  full buffer pauses reading instead of dropping. An `http_proxy` cannot pause the traffic it
+  forwards, so its observation that finds the buffer full is `skipped: buffer_full`.
 - A source acknowledges a record (a queue deletes the message) only after the body answered
   `202` for the batch that carries it. A skipped or rejected record is acknowledged at once,
   since no batch will carry it. A failing ack is logged by exception type and stops nothing.
 
 Counters, per source, are logged every 60 s and at exit as one line of numbers and reason
-codes: `read` (an `s3_capture` record is one pair), `built`, `sent` (in batches answered
-`202`), `unsent`, `pending`, `rejected` and `skipped` by the reasons below, and the body's
-`duplicate` and `rejected` counts by its reasons. `sent + unsent + pending = built` at all
-times. Reasons are `reason:count` pairs sorted by reason, or `-`:
+codes: `read` (an `s3_capture` record is one pair, an `http_proxy` record one exchange),
+`built`, `sent` (in batches answered `202`), `unsent`, `pending`, `rejected` and `skipped` by
+the reasons below, `noted` events that build and drop nothing (an `http_proxy`'s
+`invalid_traceparent` and `templates_refresh_failed`), and the body's `duplicate` and
+`rejected` counts by its reasons. `sent + unsent + pending = built` at all times. Reasons are
+`reason:count` pairs sorted by reason, or `-`:
 
 ```
 tentacle counters: source=work-unit-samples read=21 built=4 sent=4 unsent=0 pending=0
-  rejected=missing_event_id:17 skipped=- body_duplicate=0 body_rejected=-
+  rejected=missing_event_id:17 skipped=- noted=- body_duplicate=0 body_rejected=-
 ```
 
 ## Record pipeline
@@ -173,12 +186,15 @@ model's `location_env` names that key's env var.
 | `dynamodb_stream` | `table_env`, `regions`, `filter` (optional) | One stream record's new image, as plain JSON |
 | `sns_fanout` | `topic_env`, `regions` | One SNS notification, with `Message` decoded |
 | `s3_capture` | `bucket_env`, `captures` | One request and response pair |
-| `otlp`, `http_proxy` | [http-and-span-capture.md](http-and-span-capture.md) | |
+| `http_proxy` | `listen_port`, `upstream_env`, and more in [Inbound proxy](http-and-span-capture.md#inbound-proxy) | One HTTP exchange the proxy forwarded |
+| `otlp` | [OTLP receiver](http-and-span-capture.md#otlp-receiver) | |
 
 `regions` (one or more) are read in parallel. A record's region is the one it was read from,
-never one named inside the record. [Migration](#migration) shows each kind in OMG's file. Only
-`replay` has a reader in step 1.3; the tentacle skips the other kinds, as [Process](#process)
-says.
+never one named inside the record. [Migration](#migration) shows each kind in OMG's file.
+`replay` has a reader (step 1.3), and `http_proxy` an opener, `open_http_proxy` (step 1.6),
+which serves instead of reading: it reports each exchange to the runner, which shapes it with
+`ExchangePipeline` instead of `RecordPipeline`. The tentacle skips the other kinds, as
+[Process](#process) says.
 
 **`replay`** (`ReplayRecordSource`). `path_env` holds a `.json` file (an object or a list), a
 `.jsonl` file, or a directory of them, read in name order and not recursively; other files and
@@ -282,6 +298,9 @@ source kind with a reader passes it; `tests/integration/test_tentacle_canary.py`
   rejected, undecodable, and duplicate records. It fails if a canary appears in a request the
   sender posted, in the catalog's state or `/streams` (where only names may appear, in channel
   keys), or in the captured output. A kind in `READERS` without a wire form fails a test.
+- `http_proxy` has no wire form: `tests/integration/test_tentacle_proxy.py` posts through the
+  proxy, with canaries in the path, the query, headers, a cookie, a `Content-Type` parameter,
+  an invalid `traceparent`, and both bodies, and checks the same places.
 
 ## Migration
 
@@ -298,6 +317,9 @@ Elsewhere this document uses OMG's logical names (`domain_events`, `carrier_even
 
 ```yaml
 sources:
+  - {id: omg-api, kind: http_proxy, listen_port: 8021, upstream_env: OMG_API_UPSTREAM}
+  - {id: omg-validation, kind: http_proxy, listen_port: 8031,
+     upstream_env: OMG_VALIDATION_UPSTREAM}
   - id: domain-events
     kind: kinesis
     direction: internal
@@ -348,6 +370,8 @@ sources:
 
 `financials-events` matches `carrier-events` with `OMG_FINANCIALS_EVENTS_TOPIC` and
 `occurred_at: Message.published_at`. No OMG source maps `correlation_id` (open question 1).
+Step 1.6 added the two `http_proxy` sources and `OMG_API_UPSTREAM` and
+`OMG_VALIDATION_UPSTREAM` to `.env.example`.
 
 ## Tests per step
 
@@ -366,6 +390,10 @@ OMG dev on AWS, read only, by hand. Each step runs the canary harness for its ki
   still give its fingerprints) and `test_tentacle_canary.py`. The fixtures in
   `tests/fixtures/omg/test_payloads/` are OMG's synthetic samples, copied unchanged at OMG
   commit `d00569da3`.
+- **1.6.** The proxy's tests are listed in
+  [HTTP and span capture](http-and-span-capture.md#tests); the runner's are the proxy cases of
+  `test_tentacle_runner.py` (exchanges counted and sent, `buffer_full`, a failing proxy, an
+  upstream that is no URL, a busy port) and of `test_system_config.py`.
 - **1.7.** L0: each layout's keys, with no order id in a channel name, `work_id`, or
   `observation_id`; pairing; `status_code: null`; `no_layout`. L1: capture files per layout.
   L2: `make test-oracle-publisher` and `make test-fulfillment-processor` give Oracle channels.

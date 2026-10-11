@@ -9,8 +9,10 @@ tentacle, so no payload, URL, or header leaves it. Models are in
 [tentacle.md](tentacle.md); flows in [flows-and-paths.md](flows-and-paths.md). OMG is the
 example.
 
-**Status: proposal.** Roadmap steps 1.4, 1.5, and 1.6 implement it; each step's pull request
-turns the matching section into the contract of the shipped code.
+**Status:** [Inbound proxy](#inbound-proxy) is the contract of the shipped code (step 1.6), and
+so are the template rules of [Per-host templates](#per-host-templates) as the proxy applies
+them to OpenAPI templates. The rest is a proposal: steps 1.4 and 1.5 turn their sections into
+contracts.
 
 ## OTLP receiver
 
@@ -250,15 +252,38 @@ Partner hosts are illustrative; OMG's table and topic are from `config/dev.yml`.
 
 ## Inbound proxy
 
+Source kind `http_proxy` puts a reverse proxy in the tentacle in front of one HTTP service.
+Clients send to the proxy's port instead of the service's. The proxy forwards each request
+unchanged, copies both bodies aside, and reports each exchange to the runner, which shapes it
+and sends the shapes to the body with the rest of the tentacle's observations.
+
+| Module | Holds |
+|--------|-------|
+| `fire/adapters/sources/http_proxy.py` | `HttpProxy`: a uvicorn server (`h11`) in front, `httpcore` to the upstream; `listen` |
+| `fire/core/ports/exchange_source.py` | `ExchangeSource`, `ExchangeSink`, `HttpExchange`, `HttpMessage`, `ExchangeSkipReason`, `ExchangeNote` |
+| `fire/core/services/exchange_pipeline.py` | `ExchangePipeline` and `PartSkipReason` |
+| `fire/core/domain/route_template.py` | `RouteTemplate`, `RouteTable` |
+| `fire/adapters/manifests/openapi.py` | `openapi_routes`: the routes of an OpenAPI 3 document |
+| `fire/apps/tentacle/sources.py` | `open_http_proxy`: checks the upstream URL and binds the listen address |
+| `fire/apps/tentacle/runner.py` | `PlannedProxy`, and the sink that shapes and queues each exchange |
+
 | Key | Required | Meaning |
 |-----|----------|---------|
-| `id`, `kind` | yes | Common keys; `kind: http_proxy`. No `envelope` |
-| `listen_port` | yes | Port the proxy listens on |
+| `id`, `kind` | yes | Common keys; `kind: http_proxy`. No `direction` or `envelope`: channels are `inbound` |
+| `listen_port` | yes | Port the proxy listens on, `1` to `65535`; a `listen_host` and port pair is unique within a system |
 | `listen_host` | no | Bind address, default `127.0.0.1` |
-| `upstream_env` | yes | Env var holding the upstream base URL |
-| `openapi_path` | no | The upstream's OpenAPI document, default `/openapi.json` |
+| `upstream_env` | yes | Env var holding the upstream base URL, `http` or `https`; a path prefix in it is kept |
+| `openapi_path` | no | The upstream's OpenAPI document, starting with `/`, default `/openapi.json` |
 | `openapi_refresh_s` | no | Template refresh period, default `300` |
 | `max_body_bytes` | no | Largest body copied for shaping, default `1048576` |
+
+At startup ([Process](tentacle.md#process)), an unset `upstream_env` skips the source; an
+upstream that is not an `http` or `https` URL, or a listen address that cannot be bound, is a
+startup error naming the env var or the address. The proxy then serves until `SIGINT` or
+`SIGTERM`. On stop it accepts no new connection, finishes the exchanges in flight within 5
+seconds, and their shapes drain with the tentacle's other observations. An exchange still
+running then is cut: `502` with `x-fire-proxy: upstream-aborted` if nothing was sent yet, and
+`upstream_aborted`.
 
 ```yaml
 sources:
@@ -278,21 +303,31 @@ FastAPI builds them.
 - At startup the proxy fetches `openapi_path` from the upstream directly, every 5 seconds
   until it succeeds; until then requests are forwarded and `skipped: templates_unavailable`.
   It refetches every `openapi_refresh_s` to pick up a reloaded upstream's routes; a failed
-  refresh keeps the last set and is counted.
+  refresh keeps the last set and is counted `noted: templates_refresh_failed`.
 - A template is a `paths` key with its operations (`get`, `put`, `post`, `delete`, `options`,
-  `head`, `patch`, `trace`). A request matches on method and path under the
-  [template rules](#per-host-templates). A `servers` prefix is not stripped; OMG's local
-  `root_path` is empty.
+  `head`, `patch`, `trace`). It starts with `/`, has at most 240 characters, and each segment
+  is a literal (no braces, whitespace, or C0 or C1 control characters) or a whole-segment `{name}`
+  (`name` a letter or `_`, then letters, digits, `_`, `.`, or `-`). A key that is not a
+  template, or whose item is not an object, is dropped and counted in the log line
+  `templates loaded: source=<id> templates=<n> dropped=<n>`.
+- A request matches on its method, exactly, and its percent-decoded path, under the
+  [template rules](#per-host-templates): a placeholder matches one non-empty segment, the first
+  literal where two matching templates differ beats a placeholder, and between equal ones the
+  first in the document wins. `HEAD` matches only a declared `head` operation, not a `get`. A
+  `servers` prefix is not stripped; OMG's local `root_path` is empty.
 - The channel name is `{METHOD} {template}`, the same string as the `SERVER` span's operation.
 - A request matching no template is forwarded and `skipped: unmatched_route`; the count never
   names the path.
 
 ### Trace context
 
-- No `traceparent`: the proxy adds `00-{trace_id}-{span_id}-01` with fresh random ids; the
-  sampled flag makes the upstream record its `SERVER` span.
-- A valid `traceparent` is forwarded unchanged, and the proxy reads its trace id and parent id.
-  An invalid one is forwarded unchanged and counted, and the shapes carry no trace ids.
+- No `traceparent`: the proxy adds `00-{trace_id}-{span_id}-01` with fresh random ids, as the
+  last header; the sampled flag makes the upstream record its `SERVER` span.
+- One valid `traceparent` is forwarded unchanged, and the proxy reads its trace id and parent
+  id. Valid is W3C Trace Context level 1: `{version}-{trace id}-{parent id}-{flags}` in
+  lowercase hex, version not `ff`, nothing after the flags for version `00`, and neither id all
+  zeros. An invalid one, or more than one header, is forwarded unchanged and counted
+  `noted: invalid_traceparent`, and the shapes carry no trace ids.
 
 The exchange's shapes carry that `trace_id`, and as `span_id` the header's parent id, which is
 the `parent_span_id` of the upstream's `SERVER` span. No span with that id is ever sent. OMG's
@@ -300,10 +335,23 @@ FastAPI services keep the SDK's default propagators, which read W3C `traceparent
 
 ### Shapes
 
-A body is shaped when its `Content-Type` is `application/json` or ends in `+json`, its
-`Content-Encoding` is absent, `identity`, `gzip`, or `deflate`, it is complete within
-`max_body_bytes`, and it parses as a JSON object or array. Otherwise that part is skipped as
-`no_body`, `body_not_json`, `body_too_large`, or `body_encoding_unsupported`.
+`ExchangePipeline` shapes each part of an exchange whose route matched. A body is shaped when
+its `Content-Type` is `application/json` or ends in `+json`, its `Content-Encoding` is absent,
+`identity`, `gzip`, or `deflate`, it is complete within `max_body_bytes`, and it parses as a
+JSON object or array. Checked in order, per part; the first failing check decides:
+
+| Part | Result |
+|------|--------|
+| A response whose status is not `200` to `599` | `skipped: status_unclassified` |
+| An empty body | `skipped: no_body` |
+| No `Content-Type`, or a media type other than `application/json` or `*/*+json`, parameters ignored | `skipped: body_not_json` |
+| A `Content-Encoding` other than `identity`, `gzip`, `x-gzip`, or `deflate` (zlib or raw), or more than one coding | `skipped: body_encoding_unsupported` |
+| More than `max_body_bytes` as sent, or once decoded | `skipped: body_too_large` |
+| Not decodable, not JSON, or a JSON value that is not an object or array | `skipped: body_not_json` |
+| Generalizing, fingerprinting, or building the observation fails | `skipped: shaping_failed` |
+| A JSON object or array | Generalized by `FlatStarShapeGeneralizer`, fingerprinted, sent |
+
+The decoded copy and the parsed value are dropped after generalization.
 
 | Field | Request | Response |
 |-------|---------|----------|
@@ -312,8 +360,10 @@ A body is shaped when its `Content-Type` is `application/json` or ends in `+json
 | `occurred_at` | Request headers received | Response headers received |
 
 `exchange_id` is 32 random hex characters per exchange: a client can reuse a `traceparent`, so
-trace ids do not identify an exchange. Sampling hashes `exchange_id`. `region`, `work_id`, and
-`correlation_id` are `null`.
+trace ids do not identify an exchange. Sampling hashes `exchange_id` with the tentacle's rule,
+so a request and its response are kept or dropped together; a dropped exchange counts once as
+`skipped: sampled_out`. `trace_id` and `span_id` are those of [Trace context](#trace-context);
+`region`, `work_id`, and `correlation_id` are `null`.
 
 ### Transparency
 
@@ -323,18 +373,64 @@ with the `Host` header held fixed.
 - Bodies stream through as they arrive. The proxy copies at most `max_body_bytes` of each aside
   and never waits for a whole body before forwarding. Forwarded bytes are never decoded or
   re-encoded; shaping decodes the copy.
+- The request target is the path and query bytes as received, never normalized: dot segments
+  and percent escapes pass unchanged, which is why the upstream client is `httpcore` and not
+  `httpx`. A `?` with an empty query is not forwarded, since ASGI does not keep it.
 - It adds `traceparent` when absent and nothing else: no `Via`, no `X-Forwarded-*`. `Host` is
-  forwarded as received. Hop-by-hop headers follow RFC 9110; end-to-end headers pass unchanged
-  and in order.
-- Shaping runs after the response is sent, in a task the response never waits for. A failure is
-  counted `shaping_failed` with no message logged.
+  forwarded as received, or set to the upstream's for an HTTP/1.0 request without one.
+  Hop-by-hop headers follow RFC 9110 (`Connection`, the headers it names, `Keep-Alive`,
+  `Proxy-Connection`, `TE`, `Trailer`, `Transfer-Encoding`, `Upgrade`) and are removed both
+  ways; end-to-end headers pass unchanged and in order. A `Connection` token never removes
+  `Host` or `Content-Length`, and `Content-Length` is dropped when `Transfer-Encoding` frames the
+  message (RFC 9112, section 6.3). A request with `Content-Length` keeps it, a chunked request
+  is re-chunked, and a request with neither has no body.
+- The proxy's own server adds no `Date` or `Server` header and writes no access log; it adds
+  `Connection: close` to a response only when the client sent it.
+- Shaping runs after the response is sent, in a callback the response never waits for. A
+  failure of the sink is logged as `shaping failed: source=<id> error=<type>`; a failure inside
+  `ExchangePipeline` is counted `shaping_failed`.
 - Upstream unreachable (refused, DNS failure, or no connection within 5 seconds): `502` with an
-  empty body and `x-fire-proxy: upstream-unreachable`, and no observation. Without the proxy
-  the client would get a connection error; the header tells this `502` from the upstream's.
+  empty body and `x-fire-proxy: upstream-unreachable`, and no observation
+  (`upstream_unreachable`). Without the proxy the client would get a connection error; the
+  header tells this `502` from the upstream's. Any other upstream failure before the response
+  headers gives `502` with `x-fire-proxy: upstream-aborted` (`upstream_aborted`), such as an
+  upstream that closes a keep-alive connection without `Connection: close` just as the next
+  request goes out on it. The proxy never retries: the upstream may already have run the
+  request, and a direct client would see the failure too.
 - Upstream fails mid-response: the status is already sent, so the proxy closes the client
   connection (`upstream_aborted`). A client that disconnects cancels the upstream request
   (`client_aborted`). The proxy sets no read timeout of its own.
-- `Upgrade` requests (WebSocket) are out of scope: `501`, counted.
+- An `Upgrade` to `websocket` is out of scope: `501` with an empty body
+  (`upgrade_unsupported`). Any other upgrade, such as `h2c`, is a hop-by-hop header like the
+  rest: removed, and the request forwarded as HTTP/1.1, as a server may ignore an upgrade.
+
+### Counts and logs
+
+Counted on the source's [counters line](tentacle.md#sending-to-the-body). `read` counts
+exchanges; each exchange is either shaped or skipped once for the whole exchange.
+
+| Count | When |
+|-------|------|
+| `skipped: templates_unavailable`, `unmatched_route` | Forwarded, with no template to name its channel |
+| `skipped: upstream_unreachable`, `upstream_aborted`, `client_aborted`, `upgrade_unsupported` | As in [Transparency](#transparency); no observation |
+| `skipped: sampled_out` | Once per exchange sampled out |
+| `skipped:` a reason of [Shapes](#shapes) | Once per part not shaped |
+| `skipped: buffer_full` | An observation that found the tentacle's buffer full: the proxy cannot pause the traffic it forwards |
+| `noted: invalid_traceparent`, `templates_refresh_failed` | Counted; nothing is dropped |
+
+Its log lines: `templates loaded: source=<id> templates=<n> dropped=<n>` on the first load and
+whenever a count changes, `templates unavailable: source=<id> error=<type or status=<code>>`
+once until the first load, `templates refresh failed: source=<id> error=<…>`,
+`shaping failed: source=<id> error=<type>`, `exchange failed: source=<id> error=<type>` for an
+unexpected error in the proxy itself, and at `DEBUG`
+`upstream failed: source=<id> stage=<connect|before_response|mid_response> error=<type>`.
+uvicorn's own lines carry no request data: its startup lines, and `ASGI callable returned
+without completing response.` after an upstream abort. Libraries that would log request data
+are held back: uvicorn's access log is off on every connection (uvicorn turns it back on per
+connection whenever `uvicorn.access` has a handler), its `TRACE` message logger is never
+installed, and the `httpcore` logger is raised to `INFO`, since its `DEBUG` lines carry
+response headers. The OpenAPI fetch goes through the same `httpcore` pool, not `httpx`, which
+logs every URL at `INFO`.
 
 ## Privacy
 
@@ -361,9 +457,9 @@ canary run on recorded spans would catch a system that does not.
 | 1.4 | L2 | Live `make test-order` delivers those spans; Jaeger receives every trace, also with the tentacle stopped |
 | 1.5 | L0 | The examples; each id rule alone with near misses (15 hex digits, 25 base32 characters); the strings that pass every rule; template specificity; `{unlisted}`; `operations` validation |
 | 1.5 | L1 | Two recordings of the same OMG targets give the same operation names; canary ids in path positions never appear |
-| 1.6 | L0 | A fake FastAPI upstream: byte-for-byte transparency for JSON, non-JSON, gzip, empty, chunked, streamed, and oversized bodies, also with the generalizer forced to raise; `502`; `traceparent` added, kept, and kept when invalid; canaries in path, query, headers, and bodies |
-| 1.6 | L1 | A copy of OMG's `openapi.json`: a concrete path per route maps to its template; a literal beats a parameter |
-| 1.6 | L2 | OMG's test payloads posted through `:8021` give request and response channels for `POST /v1/orders/place_order` carrying the trace of its `SERVER` span |
+| 1.6 | L0 | `tests/unit/test_http_proxy.py`, a fake FastAPI upstream: byte-for-byte transparency for JSON, non-JSON, gzip, empty, chunked, streamed, and oversized bodies, a chunked request, and `HEAD`, also with a sink that raises; `502` both ways; `traceparent` added, kept, and kept when invalid or repeated; hop-by-hop headers; unmatched routes, templates loaded late, a failed refresh; `501`; client and upstream aborts; canaries in path, query, headers, and bodies. `test_exchange_pipeline.py`: each row of [Shapes](#shapes), sampling, the fields. `test_route_template.py`: parsing and specificity |
+| 1.6 | L1 | `test_openapi_routes.py` against `tests/fixtures/omg/openapi/` (the `paths` and operation ids of both services' `/openapi.json`): a concrete path per route maps to its template; a literal beats a parameter. `tests/integration/test_tentacle_proxy.py`: OMG's order fixture through the proxy to a fake upstream and into the body gives request and response channels, warm-up variants then a drifted copy notify once, and the canary |
+| 1.6 | L2 | `tests/integration/test_tentacle_proxy_omg.py`: OMG's order payloads posted through the proxy give request and response channels for `POST /v1/orders/place_order` whose span id is the parent of OMG's `SERVER` span in Jaeger, and `/openapi.json` crosses the proxy unchanged. `test_openapi_routes.py` checks the fixtures still match the live documents |
 
 L3 waits on open questions 1 and 2.
 

@@ -7,8 +7,8 @@ tentacle run on the host. Nothing in the OMG repository changes: FIRE adds one c
 passed with an extra `-f`, and its own collector config.
 
 **Status: partly planned.** The body runs, and so does the tentacle with its `replay` source
-(step 1.3). Roadmap steps 1.4, 1.6 to 1.8, 1.10, and 2.6 add the other files and commands
-below.
+(step 1.3) and its inbound proxies (step 1.6). Roadmap steps 1.4, 1.7, 1.8, 1.10, and 2.6 add
+the other files and commands below.
 
 Related: [ingest spec](../../docs/specs/ingest-drift-and-feedback.md),
 [tentacle](../../docs/specs/tentacle.md), [HTTP and span capture](../../docs/specs/http-and-span-capture.md),
@@ -35,7 +35,7 @@ OMG, per its `README.md`, `AGENTS.md`, and `.docs/runbooks/local-setup.md`:
 FIRE: Python 3.13+, uv, `jq`, `curl`, and `make install`. Copy `.env.example` to `.env` and set
 `FIRE_API_TOKEN`. The curl checks below read it from the shell: `set -a; . "$FIRE_REPO/.env"; set +a`.
 
-## Files in this directory (steps 1.4 and 2.6, none created yet)
+## Files in this directory (steps 1.4 and 2.6, none created yet; step 1.6 needs none)
 
 | File | Step | Holds |
 |------|------|-------|
@@ -145,7 +145,18 @@ curl -s http://127.0.0.1:8000/health   # in another terminal: {"status":"ok"}
 Tentacle (step 1.3; each source works once its step lands). It sends to `FIRE_BODY_URL`
 (`http://127.0.0.1:8000` in `.env.example`) with `FIRE_API_TOKEN`. Sources whose variable is
 unset, or whose kind has no reader yet, are skipped with a log line. The source variables are
-fixed in `config/systems/omg.yml`; `OMG_API_UPSTREAM` is a proposal step 1.6 fixes.
+fixed in `config/systems/omg.yml`.
+
+The inbound proxies (step 1.6) need OMG's API and validation engine up (section a without the
+collector is enough). `omg-api` listens on `:8021` in front of `:8020`, and `omg-validation`
+on `:8031` in front of `:8030`. Each fetches its upstream's `/openapi.json` and logs
+`templates loaded: source=omg-api templates=<n> dropped=0`; the other sources are skipped:
+
+```bash
+cd "$FIRE_REPO"
+OMG_API_UPSTREAM=http://localhost:8020 OMG_VALIDATION_UPSTREAM=http://localhost:8030 \
+  uv run python -m fire.apps.tentacle --system omg 2>&1 | tee /tmp/fire-tentacle.log
+```
 
 The replay alone needs neither OMG's stack nor AWS. It reads OMG's `WorkUnit` samples, logs
 `rejected=missing_event_id:<n>` for the API bodies in the same directory, and exits `0` once
@@ -164,6 +175,7 @@ cd "$FIRE_REPO"
 export OMG_MANIFEST_PATH="$OMG_REPO/scripts/event_chains/event_chains_graph.json"
 export OMG_REPLAY_PATH="$OMG_REPO/scripts/test_payloads"   # 1.3; non-WorkUnit files count as rejected
 export OMG_API_UPSTREAM=http://localhost:8020               # 1.6; the proxy listens on :8021
+export OMG_VALIDATION_UPSTREAM=http://localhost:8030        # 1.6; the proxy listens on :8031
 export OMG_TRANSMISSION_BUCKET=order-management-gateway-transmission-data-dev   # 1.7
 export OMG_EVENTS_STREAM=omg-dev-domain-events              # 1.8; needs KINESIS_ENABLED=true
 export OMG_RX_UPDATES_STREAM=rx-updates                     # 1.8; needs KINESIS_ENABLED=true
@@ -173,11 +185,10 @@ export OMG_FINANCIALS_EVENTS_TOPIC=omg-financials-topic-dev      # 1.8
 export AWS_ENDPOINT_URL=http://localhost:4566 AWS_REGION=us-east-1 \
   AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test         # 1.7, 1.8: LocalStack
 uv run python -m fire.apps.tentacle --system omg 2>&1 | tee /tmp/fire-tentacle.log
-lsof -nP -iTCP:8021 -iTCP:4318 -sTCP:LISTEN                 # in another terminal
+lsof -nP -iTCP:8021 -iTCP:8031 -iTCP:4318 -sTCP:LISTEN     # in another terminal
 curl -s -o /dev/null -w '%{http_code}\n' http://localhost:8021/healthcheck   # 200
+curl -s -o /dev/null -w '%{http_code}\n' http://localhost:8031/healthcheck   # 200
 ```
-
-TODO(1.6): pick the validation engine's proxy port (upstream `:8030`).
 
 ## c. Generate traffic
 
@@ -202,11 +213,26 @@ request in the form real callers send. OMG answers `201` on success.
 ```bash
 cd "$OMG_REPO"
 OMG_TOKEN=$(make -s jwt/generate/api SERVICE=neon | sed -n 's/^x-service-token: //p')
-for p in test_order_payload.json test_springfield_order_payload.json; do
+for p in test_order_payload.json test_springfield_order_payload.json \
+    test_rma_place_order_payload.json test_rma_exchange_lower_value.json; do
   curl -sS -o /dev/null -w "$p %{http_code}\n" http://localhost:8021/v1/orders/place_order \
     -H 'Content-Type: application/json' -H "x-service-token: $OMG_TOKEN" \
     --data-binary @"scripts/test_payloads/$p"
 done
+H="X-FIRE-Token: $FIRE_API_TOKEN"
+curl -s -H "$H" http://127.0.0.1:8000/v0/systems/omg/streams | jq '.streams[].key'
+```
+
+`/streams` lists `http:inbound:POST /v1/orders/place_order:request` and one `:response:`
+stream per status class OMG answered. The proxy adds a `traceparent` to each request, so OMG's
+`SERVER` span in Jaeger (<http://localhost:16686>) is a child of the span id the shapes carry.
+The L2 test checks both, with the four payloads above, by querying Jaeger's API; it runs its
+own proxy on a free port, so it needs no tentacle or body running:
+
+```bash
+cd "$FIRE_REPO"
+OMG_REPO="$OMG_REPO" uv run pytest tests/integration/test_tentacle_proxy_omg.py \
+  tests/unit/test_openapi_routes.py -m omg_local
 ```
 
 ## d. Phase 1 exit run (step 1.10)
@@ -316,9 +342,28 @@ rm -f /tmp/fire-body.log /tmp/fire-tentacle.log /tmp/fire-canary-order.json
 - **The collector cannot reach the tentacle.** Its logs show `otlphttp/fire` export errors. Test
   from OMG's network with `docker run --rm --network warbyparker --add-host host.docker.internal:host-gateway curlimages/curl -s -o /dev/null -w '%{http_code}\n' -X POST -H 'Content-Type: application/json' -d '{}' http://host.docker.internal:4318/v1/traces`.
   On Linux the tentacle must listen on `0.0.0.0`, not `127.0.0.1`.
-- **A tentacle port is busy.** `lsof -nP -iTCP:8021 -iTCP:4318 -sTCP:LISTEN` names the process.
+- **A tentacle port is busy.** The tentacle exits `2` with `cannot listen on 127.0.0.1:8021`;
+  `lsof -nP -iTCP:8021 -iTCP:8031 -iTCP:4318 -sTCP:LISTEN` names the process.
+- **No inbound streams.** The counters line shows `skipped=templates_unavailable:<n>` while the
+  proxy cannot fetch its upstream's `/openapi.json` (the log says `templates unavailable` once,
+  then it retries every 5 s), and `unmatched_route:<n>` for paths OMG does not declare. A
+  `502` with `x-fire-proxy: upstream-unreachable` means OMG's port is not answering.
 - **401 from FIRE.** Body and caller hold different `FIRE_API_TOKEN` values; an exported
   variable wins over `.env`. A `503` means the body has no token.
+- **500 from `place_order` with `NoSuchBucket` `federation` in the API's log.** OMG's compose
+  sets `AWS_ENDPOINT_URL` for the whole API container, so botocore sends the SSO credential
+  call (`GetRoleCredentials`, needed for the stage catalog read) to LocalStack. Without editing
+  OMG, run `aws sso login --profile <your-profile>`, then recreate only the API with an
+  override outside both repos that sets `AWS_ENDPOINT_URL_SSO:
+  https://portal.sso.us-east-1.amazonaws.com` and `AWS_ENDPOINT_URL_SSO_OIDC:
+  https://oidc.us-east-1.amazonaws.com` on `order-management-api`, passed as one more `-f` to
+  `docker compose --profile omg -f docker-compose.yml -f docker-compose.local.yml … up -d
+  --no-deps order-management-api`. The `500` still crosses the proxy: it gives a `response:5xx`
+  stream, and its trace still joins. After each such `500`, OMG closes the keep-alive
+  connection a few milliseconds later without `Connection: close`, so the next request sent on
+  it is lost: a direct client gets a connection error, and through the proxy it gets `502` with
+  `x-fire-proxy: upstream-aborted` and counts `upstream_aborted`. The proxy does not retry,
+  since OMG may already have run the request; the L2 test posts again.
 - **401 or 403 from OMG.** Local auth is off, so a `401` means the API started without
   `docker-compose.local.yml`, which mounts `config/dev.yml`. Partner `403`s and ECR errors mean
   expired SSO: `aws sso login --profile <your-profile>`, then `make secrets/sync`.
