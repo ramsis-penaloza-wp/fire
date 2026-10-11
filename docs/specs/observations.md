@@ -8,8 +8,11 @@ capture in [http-and-span-capture.md](http-and-span-capture.md), flows and paths
 [flows-and-paths.md](flows-and-paths.md), and baselines and drift in
 [ingest-drift-and-feedback.md](ingest-drift-and-feedback.md#phase-2-drift).
 
-**Status: proposal.** Roadmap steps 1.1 and 1.2 implement it; each step's pull request turns
-the matching section into the contract of the shipped code.
+**Status:** [Channel](#channel), [ShapeObservation](#shapeobservation),
+[SpanObservation](#spanobservation), [Stream key and deduplication](#stream-key-and-deduplication),
+and the model rules of [Privacy invariants](#privacy-invariants) are the contract of
+`fire/core/domain/observation.py` (roadmap step 1.1). The ingest endpoint, the catalog, and
+the streams endpoint are a proposal that step 1.2 implements.
 
 ## Channel
 
@@ -17,15 +20,20 @@ Where a payload was seen. Unknown fields are rejected.
 
 | Field | Values | Meaning |
 |-------|--------|---------|
-| `kind` | `http`, `event` | Transport |
-| `direction` | `inbound`, `internal`, `outbound` | Relative to the watched system |
+| `kind` | `http`, `event` | Transport (`ChannelKind`) |
+| `direction` | `inbound`, `internal`, `outbound` | Relative to the watched system (`ChannelDirection`) |
 | `name` | `str` | Route template, outbound operation name ([Operation names](http-and-span-capture.md#operation-names)), or event type |
-| `part` | `request`, `response`, `payload` | `http` uses `request` and `response`; `event` uses `payload` |
-| `status_class` | `2xx`, `3xx`, `4xx`, `5xx`, `none` | Required on a response, forbidden otherwise; `none` means no response came |
+| `part` | `request`, `response`, `payload` | `http` uses `request` and `response`; `event` uses `payload` (`ChannelPart`) |
+| `status_class` | `2xx`, `3xx`, `4xx`, `5xx`, `none` | Required on a response, forbidden otherwise; `none` means no response came (`StatusClass`) |
+
+A `part` that does not fit `kind` fails at `channel.part`; a `status_class` that is missing on
+a response, or set on anything else, fails at `channel.status_class`. When `part` itself
+fails, `status_class` is not checked, so each mistake gives one error.
 
 The `key` property renders `{kind}:{direction}:{name}:{part}`, plus `:{status_class}` for a
 response. `name` may contain `:`; the key stays unambiguous because `kind` and `direction`
 never contain `:` and every key ends in `:request`, `:payload`, or `:response:{status_class}`.
+`key` is not a field, so `model_dump()` leaves it out and a dumped channel validates again.
 
 | Channel | Key |
 |---------|-----|
@@ -33,11 +41,13 @@ never contain `:` and every key ends in `:request`, `:payload`, or `:response:{s
 | Outbound call to an aliased host, no response | `http:outbound:GET partner/api/{version}/orders/{order_id}:response:none` |
 | Internal event | `event:internal:fulfillment.allocated:payload` |
 
-An observation on a `none` channel carries an empty shape, `{"fields": []}`.
+An observation on a `none` channel carries an empty shape, `{"fields": []}`; any field there
+fails at `shape`.
 
 ## ShapeObservation
 
-One payload seen by the tentacle, as its shape. Unknown fields are rejected.
+One payload seen by the tentacle, as its shape. Unknown fields are rejected. Fields typed
+`| None` default to `null` and may be absent; every other field is required.
 
 | Field | Type | Meaning |
 |-------|------|---------|
@@ -57,22 +67,26 @@ One payload seen by the tentacle, as its shape. Unknown fields are rejected.
 OMG maps its `work_unit_id` to `work_id`. Which envelope value fills each field is declared
 per source in the system YAML ([Envelope](tentacle.md#envelope)).
 
+A `span_id` without a `trace_id` fails at `span_id`.
+
 ## SpanObservation
 
-One span, without its attributes. Unknown fields are rejected.
+One span, without its attributes. Unknown fields are rejected. `parent_span_id` and
+`status_code` default to `null`, `links` to `[]`; every other field is required, `error`
+included.
 
 | Field | Type | Meaning |
 |-------|------|---------|
 | `system`, `source` | `str` | As on `ShapeObservation` |
 | `trace_id` | `str` | 32 lowercase hex characters |
 | `span_id`, `parent_span_id` | `str`, `str \| None` | 16 lowercase hex characters; no parent on a root span |
-| `links` | list of `{trace_id, span_id}` | Spans this one links to; default `[]` |
+| `links` | list of `SpanLink` (`{trace_id, span_id}`) | Spans this one links to; a link rejects unknown fields |
 | `service` | `str` | Service that emitted the span |
-| `kind` | `server`, `client`, `producer`, `consumer`, `internal` | Span kind |
+| `kind` | `server`, `client`, `producer`, `consumer`, `internal` | Span kind (`SpanKind`) |
 | `operation` | `str` | Operation name ([Operation names](http-and-span-capture.md#operation-names)) |
 | `status_code` | `int \| None` | HTTP status, `100` to `599`; `None` when not HTTP or no response |
 | `error` | `bool` | The span ended in error |
-| `start`, `duration_ms` | `datetime`, `float` | Span start; duration of zero or more |
+| `start`, `duration_ms` | `datetime`, `float` | Span start; a finite duration of zero or more |
 
 ## Stream key and deduplication
 
@@ -90,13 +104,17 @@ the same events.
 
 One event carried by two sources is two observations; one span sent by two sources is one.
 
+`ShapeObservation.stream_key` and `ShapeObservation.dedupe_key` return these tuples, and so
+does `SpanObservation.dedupe_key`. Like `Channel.key`, they are properties, not fields.
+
 ## Privacy invariants
 
 - **No open types.** No field is `Any`, a `dict`, or free JSON. The only field built from a
   payload is `shape`: paths, value types, cardinality, and optionality.
-- **Unknown fields fail at every depth.** Step 1.1 adds `extra="forbid"` to `Shape`,
-  `ShapeField`, and `ShapeFingerprint` (which `POST /v0/diagnose` also uses), so a `payload`,
-  `body`, `value`, or `attributes` key anywhere fails.
+- **Unknown fields fail at every depth.** The observation models, `Channel`, `SpanLink`,
+  `Shape`, `ShapeField`, and `ShapeFingerprint` all reject unknown fields (the last three on
+  `POST /v0/diagnose` too), so a `payload`, `body`, `value`, or `attributes` key anywhere
+  fails.
 - **Bounded fields.** Every string field of the observation models and `Channel` is non-empty
   and at most 256 characters. Trace and span ids are fixed-length lowercase hex, not all
   zeros. Every `datetime` is timezone-aware.
@@ -201,10 +219,10 @@ Streams are sorted by `source`, then `key`; fingerprints by `observations` desce
 
 ## Migration
 
-Step 1.1 replaces the main spec's event-only `Observation`; its
+Step 1.1 replaced the main spec's event-only `Observation`; its
 [Observation](ingest-drift-and-feedback.md#observation) and
 [Ingest endpoint and catalog](ingest-drift-and-feedback.md#ingest-endpoint-and-catalog)
-sections become links here.
+sections are links here.
 
 | Before | After |
 |--------|-------|

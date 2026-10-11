@@ -38,11 +38,12 @@ Kinesis / replay files  ──raw──▶ envelope → generalize → fingerpri
 ```
 
 - The tentacle is a separate process. It runs the `ShapeGeneralizer` and
-  `ShapeFingerprinter` adapters and sends `Observation`s over HTTP with `X-FIRE-Token`.
+  `ShapeFingerprinter` adapters and sends `ShapeObservation`s and `SpanObservation`s over HTTP
+  with `X-FIRE-Token`.
 - The body never sees a payload. It recomputes the fingerprint from the observation's shape
   and rejects the observation on a mismatch.
 - A durable buffer between tentacle and body (SQS, Kinesis) replaces HTTP once FIRE runs
-  outside a laptop. The `Observation` contract does not change.
+  outside a laptop. The observation contracts do not change.
 
 ## Facts about OMG this design relies on
 
@@ -240,7 +241,9 @@ drift signals. Both read endpoints require `X-FIRE-Token`.
 | A client `fingerprint` on `/v0/diagnose` kept as is | Recomputed when a `shape` is present; a mismatch is rejected, as for observations |
 | `EchoReasoner` says "No path/shape evidence yet" when a shape is present | Possibilities from drift fragments; label fixed |
 | `ProcessHop` cannot mark an edge that crosses a span link | A `via` field, see [Process path in the dossier](flows-and-paths.md#process-path-in-the-dossier) |
-| `Shape`, `ShapeField`, `ShapeFingerprint` accept unknown fields | Unknown fields rejected, see [Migration](observations.md#migration) |
+
+Step 1.1 made `Shape`, `ShapeField`, and `ShapeFingerprint` reject unknown fields
+([Privacy invariants](observations.md#privacy-invariants)).
 
 ## Open questions
 
