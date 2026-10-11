@@ -44,4 +44,6 @@ addopts = ["-q", "--tb=short", "--strict-markers"]
 asyncio_mode = "auto"
 markers = [
     "unit: mark test as a unit test",
+    "integration: end-to-end test of the body's API and pipeline, in tests/integration/",
+    "omg_local: needs OMG's local stack (L2); skipped unless OMG_REPO is set",
 ]
