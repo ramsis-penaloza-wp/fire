@@ -9,6 +9,7 @@ from typing import Annotated, Any, Literal
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from fire.core.domain.baseline import DriftPolicy
 from fire.core.domain.envelope import DottedPath, Envelope
 from fire.core.domain.observation import ChannelDirection
 
@@ -247,6 +248,7 @@ class SystemConfig(_Strict):
     sources: list[SourceConfig] = Field(default_factory=list)
     policy: PolicyConfig = Field(default_factory=PolicyConfig)
     fingerprinting: FingerprintingConfig = Field(default_factory=FingerprintingConfig)
+    drift: DriftPolicy = Field(default_factory=DriftPolicy)
 
     @model_validator(mode="after")
     def _source_ids_are_unique(self) -> SystemConfig:

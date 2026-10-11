@@ -11,6 +11,7 @@ import pytest
 
 from fire.adapters.memory.observation_catalog import MemoryObservationCatalog
 from fire.adapters.shapes.sha256 import Sha256ShapeFingerprinter
+from fire.core.domain.baseline import BaselineStatus, DriftPolicy
 from fire.core.domain.dossier import Shape, ShapeField, ValueType
 from fire.core.domain.observation import (
     Channel,
@@ -81,6 +82,8 @@ def _summary(catalog: MemoryObservationCatalog, system: str = "shop") -> list[di
         {
             "source": stream.source,
             "key": stream.key,
+            "status": stream.status,
+            "samples": stream.samples,
             "observations": stream.observations,
             "fingerprints": [
                 (f.schema_hash, f.observations, f.first_observed_at, f.last_observed_at)
@@ -89,6 +92,12 @@ def _summary(catalog: MemoryObservationCatalog, system: str = "shop") -> list[di
         }
         for stream in catalog.streams(system)
     ]
+
+
+def _baselines(
+    catalog: MemoryObservationCatalog, system: str = "shop"
+) -> list[tuple[BaselineStatus, int]]:
+    return [(stream.status, stream.samples) for stream in catalog.streams(system)]
 
 
 @pytest.mark.unit
@@ -107,6 +116,8 @@ def test_first_add_stores_and_summarizes_the_stream() -> None:
     assert stream.source == "order-events"
     assert stream.channel == observation.channel
     assert stream.key == "event:internal:order.created:payload"
+    assert stream.status is BaselineStatus.REBUILDING
+    assert stream.samples == 1
     assert stream.observations == 1
     [fingerprint] = stream.fingerprints
     assert fingerprint.schema_hash == observation.fingerprint.schema_hash
@@ -153,7 +164,7 @@ def test_concurrent_adds_store_once() -> None:
     assert [shape for shape, _ in results].count(True) == 1
     assert [stored for _, stored in results].count(True) == 1
     [stream] = catalog.streams("shop")
-    assert stream.observations == 1
+    assert stream.observations == stream.samples == 1
 
 
 @pytest.mark.unit
@@ -251,3 +262,83 @@ def test_fingerprint_times_are_the_earliest_and_latest_observed_at() -> None:
     assert fingerprint.observations == 4
     assert fingerprint.first_observed_at == T0
     assert fingerprint.last_observed_at == T0 + timedelta(minutes=30)
+
+
+@pytest.mark.unit
+def test_stream_turns_warm_at_the_systems_min_samples() -> None:
+    catalog = MemoryObservationCatalog({"shop": DriftPolicy(min_samples=3)})
+    catalog.add_shape(_shape_observation("obs-0"))
+    catalog.add_shape(_shape_observation("obs-1"))
+    assert _baselines(catalog) == [(BaselineStatus.REBUILDING, 2)]
+
+    catalog.add_shape(_shape_observation("obs-2"))
+    assert _baselines(catalog) == [(BaselineStatus.WARM, 3)]
+
+
+@pytest.mark.unit
+def test_drift_policies_are_per_system() -> None:
+    catalog = MemoryObservationCatalog(
+        {"shop": DriftPolicy(min_samples=2), "billing": DriftPolicy()}
+    )
+    for system in ("shop", "billing"):
+        for index in range(2):
+            catalog.add_shape(_shape_observation(f"obs-{index}", system=system))
+
+    assert _baselines(catalog, "shop") == [(BaselineStatus.WARM, 2)]
+    assert _baselines(catalog, "billing") == [(BaselineStatus.REBUILDING, 2)]
+
+
+@pytest.mark.unit
+def test_system_without_a_policy_gets_the_default_min_samples() -> None:
+    catalog = MemoryObservationCatalog({"billing": DriftPolicy(min_samples=1)})
+    for index in range(19):
+        catalog.add_shape(_shape_observation(f"obs-{index}"))
+    assert _baselines(catalog) == [(BaselineStatus.REBUILDING, 19)]
+
+    catalog.add_shape(_shape_observation("obs-19"))
+    assert _baselines(catalog) == [(BaselineStatus.WARM, 20)]
+
+
+@pytest.mark.unit
+def test_duplicate_add_folds_nothing() -> None:
+    catalog = MemoryObservationCatalog({"shop": DriftPolicy(min_samples=2)})
+    assert catalog.add_shape(_shape_observation()) is True
+    assert catalog.add_shape(_shape_observation(paths=("order_id", "total"))) is False
+
+    assert _baselines(catalog) == [(BaselineStatus.REBUILDING, 1)]
+
+
+@pytest.mark.unit
+def test_samples_count_every_stored_observation_of_a_stream() -> None:
+    catalog = MemoryObservationCatalog()
+    forms = [("a",), ("b",), ("a",), ("a", "b")]
+    for index, paths in enumerate(forms):
+        catalog.add_shape(_shape_observation(f"obs-{index}", paths=paths))
+
+    [stream] = catalog.streams("shop")
+    assert len(stream.fingerprints) == 3
+    assert stream.samples == stream.observations == len(forms)
+
+
+@pytest.mark.unit
+def test_each_stream_key_has_its_own_baseline() -> None:
+    catalog = MemoryObservationCatalog({"shop": DriftPolicy(min_samples=2)})
+    added = [
+        ("obs-1", "order-events", "order.created"),
+        ("obs-1", "order-table", "order.created"),
+        ("obs-2", "order-events", "order.created"),
+        ("obs-3", "order-events", "order.shipped"),
+    ]
+    for observation_id, source, name in added:
+        catalog.add_shape(
+            _shape_observation(observation_id, source=source, channel=_channel(name))
+        )
+
+    streams = catalog.streams("shop")
+    assert [
+        (stream.source, stream.channel.name, stream.status, stream.samples) for stream in streams
+    ] == [
+        ("order-events", "order.created", BaselineStatus.WARM, 2),
+        ("order-events", "order.shipped", BaselineStatus.REBUILDING, 1),
+        ("order-table", "order.created", BaselineStatus.REBUILDING, 1),
+    ]

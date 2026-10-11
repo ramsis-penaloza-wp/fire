@@ -68,7 +68,7 @@ def build_container(config_path: Path | None = None) -> Container:
         notifier=ConsoleNotifier(),
     )
     fingerprinter = Sha256ShapeFingerprinter()
-    catalog = MemoryObservationCatalog()
+    catalog = MemoryObservationCatalog({name: system.drift for name, system in systems.items()})
     sources = {name: system.source_ids() for name, system in systems.items()}
     return Container(
         config=config,

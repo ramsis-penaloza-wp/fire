@@ -83,3 +83,8 @@ sources:
 # DLQ attribution joins abandoned work units to observations, so every event is fingerprinted.
 fingerprinting:
   sample_rate: 1.0
+
+# Baselines and shape drift: docs/specs/ingest-drift-and-feedback.md#baseline.
+drift:
+  min_samples: 20      # observations folded before a stream is warm and may raise drift
+  required_ratio: 1.0  # a field every sample carried is required

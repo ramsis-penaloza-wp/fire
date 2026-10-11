@@ -159,6 +159,8 @@ async def streams(
             {
                 "source": stream.source,
                 "key": stream.key,
+                "status": stream.status,
+                "samples": stream.samples,
                 "observations": stream.observations,
                 "fingerprints": [
                     fingerprint.model_dump(mode="json") for fingerprint in stream.fingerprints

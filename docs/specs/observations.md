@@ -15,7 +15,9 @@ capture in [http-and-span-capture.md](http-and-span-capture.md), flows and paths
 1.1). The [ingest endpoint](#ingest-endpoint), the [catalog](#observationcatalog), and the
 [streams endpoint](#streams-endpoint) are step 1.2: `fire/core/services/ingest.py`,
 `fire/core/ports/observation_catalog.py`, `fire/adapters/memory/observation_catalog.py`, and
-`fire/apps/incident_engine/app.py`.
+`fire/apps/incident_engine/app.py`. Step 2.1 added the baseline fold to the catalog and each
+stream's `status` and `samples` (`fire/core/domain/baseline.py`); the baseline's contract is
+[Baseline](ingest-drift-and-feedback.md#baseline).
 
 ## Channel
 
@@ -194,28 +196,32 @@ Port in `fire/core/ports/observation_catalog.py`; the first adapter is in memory
 
 | Operation | Contract |
 |-----------|----------|
-| `add_shape(observation) -> bool` | Stores the observation unless its dedupe key is known; returns whether it did |
+| `add_shape(observation) -> bool` | Stores the observation unless its dedupe key is known; returns whether it did. A stored shape folds into the baseline of its stream key in the same atomic step |
 | `add_span(observation) -> bool` | The same, keyed by `(system, trace_id, span_id)` |
-| `streams(system) -> list[StreamSummary]` | One summary per stream key of the system, sorted as in [Streams endpoint](#streams-endpoint); empty for a system with no observations |
+| `streams(system) -> list[StreamSummary]` | One summary per stream key of the system, with its baseline's `status` and `samples`, sorted as in [Streams endpoint](#streams-endpoint); empty for a system with no observations |
 
-The operations are synchronous. A `StreamSummary` holds `source`, `channel`, and
-`fingerprints`, each a `FingerprintSummary` (`schema_hash`, `observations`,
+The operations are synchronous. A `StreamSummary` holds `source`, `channel`, `status` (a
+`BaselineStatus` under the system's drift policy), `samples` (the observations folded into the
+baseline), and `fingerprints`, each a `FingerprintSummary` (`schema_hash`, `observations`,
 `first_observed_at`, `last_observed_at`); `key` and `observations` (the sum over its
 fingerprints) are properties. Both models are in `fire/core/domain/observation.py` and reject
 unknown fields.
 
-Per stream key the catalog keeps the observation count and, per fingerprint, the `Shape`, its
-count, and the earliest and latest `observed_at`, whatever the arrival order. Per accepted shape
-it keeps an index entry: the dedupe key, the stream key, `schema_hash`, both timestamps,
-`region`, `trace_id`, `span_id`, `work_id`, and `correlation_id`. Spans are kept whole. Flows
-read spans and index entries ([Shapes on flows](flows-and-paths.md#shapes-on-flows)); baselines
-fold per stream key ([Baseline](ingest-drift-and-feedback.md#baseline)). The port gains those
-reads with the steps that need them (1.9 and 2.1).
+Per stream key the catalog keeps the observation count, a `Baseline`, and, per fingerprint, the
+`Shape`, its count, and the earliest and latest `observed_at`, whatever the arrival order. Per
+accepted shape it keeps an index entry: the dedupe key, the stream key, `schema_hash`, both
+timestamps, `region`, `trace_id`, `span_id`, `work_id`, and `correlation_id`. Spans are kept
+whole. Flows read spans and index entries ([Shapes on flows](flows-and-paths.md#shapes-on-flows));
+baselines fold per stream key ([Baseline](ingest-drift-and-feedback.md#baseline)). Step 2.1 gave
+the port its baseline reads, the `status` and `samples` of `streams`; the flow reads come with
+step 1.9.
 
 Checking and storing a dedupe key is one atomic step, so concurrent tentacles, two regions, and
 resent batches store each observation once. `MemoryObservationCatalog` guards every operation
-with one lock and keeps its dedupe index for the life of the process; a retention window comes
-with the SQLite adapter in step 3.1.
+with one lock and keeps its dedupe index and baselines for the life of the process; a retention
+window comes with the SQLite adapter in step 3.1. It takes each system's drift policy, the
+system YAML's `drift` block, from `build_container`; a system it does not name gets the
+defaults.
 
 ## Streams endpoint
 
@@ -226,7 +232,7 @@ list.
 ```json
 {"system": "omg", "streams": [{
   "source": "domain-events", "key": "event:internal:fulfillment.allocated:payload",
-  "observations": 43,
+  "status": "warm", "samples": 43, "observations": 43,
   "fingerprints": [{"schema_hash": "3f1c…", "observations": 40,
                     "first_observed_at": "2026-10-11T16:30:01Z",
                     "last_observed_at": "2026-10-11T17:02:44Z"}]}]}
@@ -234,9 +240,13 @@ list.
 
 Streams are sorted by `source`, then `key`; fingerprints by `observations` descending, then
 `schema_hash`. Spans are not streams; they show in `/paths`
-([Paths endpoint](flows-and-paths.md#paths-endpoint)). Step 2.1 adds each stream's `status` and
-`samples`, and step 2.2 its open drift signals
-([Read endpoints](ingest-drift-and-feedback.md#read-endpoints)).
+([Paths endpoint](flows-and-paths.md#paths-endpoint)).
+
+Each stream carries its baseline's `status` and `samples` (step 2.1); its open drift signals
+come with step 2.2 ([Read endpoints](ingest-drift-and-feedback.md#read-endpoints)). `status` is
+`baseline rebuilding` until `samples` reaches the system's `drift.min_samples`, then `warm`
+([Baseline](ingest-drift-and-feedback.md#baseline)). Until step 2.2, every stored shape folds,
+so `samples` equals `observations`.
 
 ## Migration
 
@@ -264,7 +274,10 @@ them. `Origin` stays. Step 1.2 also added `sources[].id` ahead of step 1.3: requ
 
 Step 1.2's tests are `tests/unit/test_observation_catalog_memory.py`,
 `tests/unit/test_observation_ingest.py`, and `tests/integration/test_observations_api.py`.
-Integration tests use `TestClient` with config written to `tmp_path`.
+Step 2.1 added `tests/unit/test_baseline.py` and cases in
+`tests/unit/test_observation_catalog_memory.py`, `tests/unit/test_system_config.py`, and
+`tests/integration/test_observations_api.py`. Integration tests use `TestClient` with config
+written to `tmp_path`.
 
 | Step | Level | Proves |
 |------|-------|--------|
@@ -273,6 +286,8 @@ Integration tests use `TestClient` with config written to `tmp_path`.
 | 1.2 | L0 | A second add of one key returns `False` and changes nothing; concurrent adds store once; one event from two sources is two observations, one span from two sources is one |
 | 1.2 | Integration | `401` and `503` come before `422`; a mixed batch returns each reason at its index with correct counts; a changed `schema_hash` and a set `notes` are mismatches; a resent batch is all `duplicate` |
 | 1.2 | Integration | `/streams` counts accepted items only and is `404` for an unknown system; a canary under an unknown key of a rejected item reaches neither the response nor the logs |
+| 2.1 | L0 | A fold counts a pair listed twice in one shape once and a known fingerprint again; status is `warm` at `min_samples`, not one sample before; `compares` is `False` while rebuilding and for a folded fingerprint; each stream key has its own baseline; each system gets its own policy and an unnamed one the defaults; a duplicate folds nothing; `drift` rejects unknown keys and out-of-range values |
+| 2.1 | Integration | `/streams` turns a stream from `baseline rebuilding` to `warm` at its system's `drift.min_samples`, with `samples` equal to `observations`, while a system on the default stays rebuilding; a resent batch folds nothing |
 
 ## Open questions
 

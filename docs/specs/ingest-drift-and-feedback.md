@@ -1,10 +1,13 @@
 # Ingest, drift, and feedback
 
-**Status: phase 0 is done; phases 1 to 4 are a proposal.** This is the route from today's
-engine, which only diagnoses what a caller posts to `POST /v0/diagnose`, to an engine that
-watches a system on its own, detects shape drift, diagnoses incidents, and learns from
-feedback. The order of work, with what each step must achieve and how it is tested, is in
-[docs/roadmap.md](../roadmap.md).
+**Status:** phase 0 and [Baseline](#baseline) (roadmap step 2.1) are the contract of the shipped
+code. Phase 1 lives in the specs its sections link to, each with its own status; the rest of
+phases 2 to 4 is a proposal.
+
+This is the route from today's engine, which only diagnoses what a caller posts to
+`POST /v0/diagnose`, to an engine that watches a system on its own, detects shape drift,
+diagnoses incidents, and learns from feedback. The order of work, with what each step must
+achieve and how it is tested, is in [docs/roadmap.md](../roadmap.md).
 
 ## Goal
 
@@ -119,12 +122,47 @@ learns a path per entry operation, and attaches shapes to their spans.
 
 ### Baseline
 
-Per stream key: the number of observations folded in (`samples`), and for every
-`(path, value_type)` seen, how many observations carried it. A fingerprint seen before
-skips comparison.
+Per stream key, the catalog keeps a `Baseline` (`fire/core/domain/baseline.py`): what the
+observations folded so far carried. It holds paths, value types, and schema hashes, never
+values. It is a dataclass, not a wire model: `/streams` shows only its `status` and `samples`
+([Streams endpoint](observations.md#streams-endpoint)).
 
-Until `samples` reaches `drift.min_samples`, the stream's status is `baseline rebuilding`
-and it raises no drift. This is the honest-degradation rule: no baseline, no drift claims.
+| Field | Holds |
+|-------|-------|
+| `samples` | The number of observations folded in |
+| `presence` | Per `(path, value_type)`, how many folded observations carried it; a shape that lists one pair twice counts once |
+| `fingerprints` | The schema hashes folded so far |
+
+The catalog folds each shape it stores into the baseline of its stream key, in the same atomic
+step that stores it ([ObservationCatalog](observations.md#observationcatalog)). A duplicate
+folds nothing.
+
+Until `samples` reaches the system's `drift.min_samples`, the stream's status is
+`baseline rebuilding` and it raises no drift; from then on it is `warm` (`BaselineStatus`).
+This is the honest-degradation rule: no baseline, no drift claims.
+
+A fingerprint seen before skips comparison: `Baseline.compares(schema_hash, policy)` is true
+only on a warm baseline, for a fingerprint it has not folded. A known fingerprint still folds
+again, so `presence` counts observations, not fingerprints. The comparison itself comes with
+step 2.2 ([Drift rules](#drift-rules)); until then every stored shape folds.
+
+`MemoryObservationCatalog` keeps the baselines in process memory, so after a restart every
+stream starts again in `baseline rebuilding`.
+
+The system YAML's `drift` block (`DriftPolicy`) sets the thresholds per system. It is
+optional, unknown keys are rejected, and a system without it gets the defaults. `omg.yml` and
+`_template.yml` declare both keys at their defaults.
+
+| Key | Type | Bounds | Default | Meaning |
+|-----|------|--------|---------|---------|
+| `min_samples` | `int` | `1` or more | `20` | Observations folded before a stream is warm |
+| `required_ratio` | `float` | In `(0, 1]`, finite | `1.0` | Share of samples that makes a `(path, value_type)` required; the `removed` rule reads it (step 2.2) |
+
+```yaml
+drift:
+  min_samples: 20
+  required_ratio: 1.0
+```
 
 ### Drift rules
 
@@ -144,11 +182,7 @@ A drifted fingerprint is not folded into the baseline. It becomes one drift sign
 `(stream key, fingerprint)` with a first-seen time and an occurrence count, and it notifies
 once. Acknowledging a drift so it joins the baseline is phase 4 feedback.
 
-```yaml
-drift:
-  min_samples: 20
-  required_ratio: 1.0
-```
+`drift.min_samples` and `drift.required_ratio` are set per system ([Baseline](#baseline)).
 
 ### Drift incidents
 
@@ -178,8 +212,8 @@ the demo.
 
 ### Read endpoints
 
-`GET /v0/systems/{system}/streams` lists each stream key with its status, samples, and open
-drift signals. Both read endpoints require `X-FIRE-Token`.
+`GET /v0/systems/{system}/streams` lists each stream key with its `status` and `samples`
+(step 2.1); open drift signals come with step 2.2. Both read endpoints require `X-FIRE-Token`.
 
 ### Demo
 
@@ -234,7 +268,6 @@ drift signals. Both read endpoints require `X-FIRE-Token`.
 | Today | Proposed |
 |-------|----------|
 | `project_id` on `Incident`, `Dossier`, `DiagnoseRequest` | `system`, validated against loaded systems, so the notifier can pick the Slack channel |
-| `ObservationCatalog` without baselines | A baseline per stream key |
 | `sources[].dedupe_key` | `sources[].envelope`; new `kind: replay` |
 | `fingerprinting.sample_rate` validated only | Applied in the tentacle |
 | A client `fingerprint` on `/v0/diagnose` kept as is | Recomputed when a `shape` is present; a mismatch is rejected, as for observations |
@@ -246,7 +279,8 @@ Step 1.1 made `Shape`, `ShapeField`, and `ShapeFingerprint` reject unknown field
 and `ShapeRecord` with `ObservationCatalog`, removed `OriginRegistry`, and added
 `sources[].id` ([Migration](observations.md#migration)). Step 1.3 replaced `dedupe_key` with
 `envelope`, added the source kinds and `kind: replay`, and applies `sample_rate` in the tentacle
-([Migration](tentacle.md#migration)).
+([Migration](tentacle.md#migration)). Step 2.1 gave `ObservationCatalog` a baseline per stream
+key ([Baseline](#baseline)).
 
 ## Open questions
 

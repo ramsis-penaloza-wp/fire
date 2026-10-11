@@ -13,8 +13,9 @@ Model: `SystemConfig` in `fire/apps/config.py`. Contract:
   skipped by the loader; a test keeps `_template.yml` valid.
 - Unknown keys fail validation at every level. A new key needs a model field, a test, and a row
   in the spec.
-- Declare decisions only: Slack target, manifest location, sources, policy exceptions, and
-  sampling. Never list events, processors, or services; discovery reads them from the manifest.
+- Declare decisions only: Slack target, manifest location, sources, policy exceptions,
+  sampling, and drift thresholds. Never list events, processors, or services; discovery reads
+  them from the manifest.
 - `notify.slack.channel_id` is a channel id (`C…` or `G…`), never a `#name`.
 - Paths and resource names go through env vars (`path_env`, `stream_env`, `table_env`,
   `topic_env`, `bucket_env`). Add each new env var to `.env.example`.

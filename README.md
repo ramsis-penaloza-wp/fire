@@ -166,8 +166,8 @@ No fail-open “secret optional” mode outside an explicit local-dev override.
 - `POST /v0/observations` — ingest shape and span observations (`X-FIRE-Token` required);
   `202` with accepted, duplicate, and rejected counts per list
   (`docs/specs/observations.md`).
-- `GET /v0/systems/{system}/streams` — observation and fingerprint counts per stream key
-  (`X-FIRE-Token` required).
+- `GET /v0/systems/{system}/streams` — baseline status and samples, plus observation and
+  fingerprint counts, per stream key (`X-FIRE-Token` required).
 
 ### Planned
 
