@@ -76,8 +76,11 @@ is the `source` of every observation read from it. Two systems may reuse an id.
 | `dynamodb_stream` | `direction`, `envelope`, `table_env`, `regions`, `filter` (optional) |
 | `sns_fanout` | `direction`, `envelope`, `topic_env`, `regions` |
 | `s3_capture` | `bucket_env`, `captures` |
+| `http_proxy` | `listen_port`, `upstream_env`, and optional `listen_host`, `openapi_path`, `openapi_refresh_s`, `max_body_bytes` |
 
-[tentacle.md](tentacle.md#sources-in-the-system-yaml) defines each key. `envelope.event_id`
+[tentacle.md](tentacle.md#sources-in-the-system-yaml) defines each key, and
+[http-and-span-capture.md](http-and-span-capture.md#inbound-proxy) the `http_proxy` ones; two
+`http_proxy` sources of one system cannot share a `listen_host` and `listen_port`. `envelope.event_id`
 identifies one event across regions, so a system that publishes the same event in several
 regions counts it once. It replaced `dedupe_key`; a file that still has it fails to load with a
 message naming `envelope.event_id`.
@@ -177,7 +180,8 @@ of 125 in `declared_unseen`: reading Kinesis alone does not cover OMG.
 ## Follow-ups
 
 - The tentacle ([tentacle.md](tentacle.md)) reads `replay` sources and feeds observed events
-  into the catalog; the other kinds follow in roadmap steps 1.7 and 1.8. Since step 2.4, each
+  into the catalog, and since step 1.6 its `http_proxy` sources feed inbound request and
+  response shapes; the other kinds follow in roadmap steps 1.4, 1.7, and 1.8. Since step 2.4, each
   shape drift incident runs `audit_coverage` with the system's observed event types
   ([Drift incidents](ingest-drift-and-feedback.md#drift-incidents)); the coverage endpoint is
   step 2.5.

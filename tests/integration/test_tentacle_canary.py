@@ -134,7 +134,7 @@ def test_replay_canary(
     assert (
         "source=samples read=11 built=4 sent=4 unsent=0 pending=0 "
         "rejected=bad_name:1,bad_timestamp:1,invalid:1,missing_event_id:1,undecodable:2 "
-        "skipped=local_duplicate:1 body_duplicate=0 body_rejected=-"
+        "skipped=local_duplicate:1 noted=- body_duplicate=0 body_rejected=-"
     ) in caplog.text
 
     posted = [shape for body in transport.bodies for shape in json.loads(body)["shapes"]]

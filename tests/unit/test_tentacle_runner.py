@@ -7,7 +7,9 @@ import json
 import logging
 import os
 import signal
-from collections.abc import AsyncIterator, Mapping
+import socket
+from collections.abc import AsyncIterator, Callable, Mapping
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -24,14 +26,24 @@ from fire.apps.tentacle.runner import (
     EXIT_STARTUP_ERROR,
     EXIT_UNSENT,
     Plan,
+    PlannedProxy,
     PlannedSource,
     _serve,
+    prepare,
     run,
     run_tentacle,
 )
 from fire.core.domain.envelope import Envelope
 from fire.core.domain.observation import ChannelDirection
+from fire.core.ports.exchange_source import (
+    ExchangeNote,
+    ExchangeSink,
+    ExchangeSkipReason,
+    HttpExchange,
+    HttpMessage,
+)
 from fire.core.ports.record_source import RawRecord
+from fire.core.services.exchange_pipeline import ExchangePipeline
 from fire.core.services.record_pipeline import RecordPipeline
 
 TOKEN = "runner-test-token"
@@ -269,7 +281,7 @@ def test_every_record_settled_exits_0_and_logs_its_counters(
     assert (
         "tentacle counters: source=samples read=6 built=2 sent=2 unsent=0 pending=0 "
         "rejected=bad_name:1,missing_event_id:1,undecodable:1 skipped=local_duplicate:1 "
-        "body_duplicate=0 body_rejected=-"
+        "noted=- body_duplicate=0 body_rejected=-"
     ) in caplog.text
 
 
@@ -449,6 +461,197 @@ async def test_counters_are_logged_periodically(caplog: pytest.LogCaptureFixture
     await asyncio.wait_for(running, 5)
 
     assert caplog.text.count("tentacle counters: source=scripted") >= 3
+
+
+class ScriptedProxy:
+    """Reports scripted calls to its sink, then serves until cancelled or fails."""
+
+    def __init__(self, calls: list[Callable[[ExchangeSink], None]], *, fail: bool = False):
+        self.calls = calls
+        self.fail = fail
+        self.cancelled = False
+
+    async def serve(self, sink: ExchangeSink) -> None:
+        for call in self.calls:
+            call(sink)
+        if self.fail:
+            raise RuntimeError("planted-proxy-detail")
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            self.cancelled = True
+            raise
+
+
+def _message(body: bytes, content_type: str | None = "application/json") -> HttpMessage:
+    return HttpMessage(
+        received_at=datetime(2026, 10, 11, 16, 30, tzinfo=UTC),
+        content_type=content_type,
+        content_encoding=None,
+        body=body,
+    )
+
+
+def _exchange(
+    method: str, request: bytes, status: int, response: bytes, exchange_id: str
+) -> HttpExchange:
+    return HttpExchange(
+        exchange_id=exchange_id,
+        method=method,
+        template="/v1/orders/{order_id}",
+        status_code=status,
+        request=_message(request),
+        response=_message(response),
+    )
+
+
+def _proxy_plan(proxy: ScriptedProxy, **tentacle: Any) -> Plan:
+    pipeline = ExchangePipeline(
+        system="shop",
+        source="api",
+        sample_rate=1.0,
+        max_body_bytes=1024,
+        generalizer=FlatStarShapeGeneralizer(),
+        fingerprinter=Sha256ShapeFingerprinter(),
+    )
+    return Plan(
+        system="shop",
+        sources=[PlannedProxy(id="api", proxy=proxy, pipeline=pipeline)],
+        tentacle=TentacleConfig.model_validate(tentacle),
+        url="http://body/v0/observations",
+        token=TOKEN,
+    )
+
+
+async def _serve_briefly(plan: Plan, body: Body) -> int:
+    stop = asyncio.Event()
+    running = asyncio.create_task(run(plan, stop, transport=body.transport()))
+    await asyncio.sleep(0.1)
+    stop.set()
+    return await asyncio.wait_for(running, 5)
+
+
+@pytest.mark.unit
+async def test_proxy_exchanges_are_shaped_sent_and_counted(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.INFO)
+    shaped = _exchange("PUT", b'{"qty": 1}', 201, b'{"id": "x"}', "a" * 32)
+    empty = _exchange("GET", b"", 204, b"", "b" * 32)
+    proxy = ScriptedProxy(
+        [
+            lambda sink: sink.exchange(shaped),
+            lambda sink: sink.skip(ExchangeSkipReason.UNMATCHED_ROUTE),
+            lambda sink: sink.note(ExchangeNote.INVALID_TRACEPARENT),
+            lambda sink: sink.exchange(empty),
+        ]
+    )
+    body = Body()
+
+    assert await _serve_briefly(_proxy_plan(proxy, flush_ms=1), body) == EXIT_OK
+
+    assert proxy.cancelled
+    assert sorted((shape["observation_id"], shape["source"]) for shape in body.shapes) == [
+        ("a" * 32 + ":request", "api"),
+        ("a" * 32 + ":response", "api"),
+    ]
+    assert (
+        "source=api read=3 built=2 sent=2 unsent=0 pending=0 rejected=- "
+        "skipped=no_body:2,unmatched_route:1 noted=invalid_traceparent:1 "
+        "body_duplicate=0 body_rejected=-"
+    ) in caplog.text
+
+
+@pytest.mark.unit
+async def test_proxy_observations_that_find_the_buffer_full_are_skipped(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.INFO)
+    shaped = _exchange("PUT", b'{"qty": 1}', 201, b'{"id": "x"}', "c" * 32)
+    proxy = ScriptedProxy([lambda sink: sink.exchange(shaped)])
+
+    assert await _serve_briefly(_proxy_plan(proxy, buffer_size=1, flush_ms=1), Body()) == EXIT_OK
+    assert "read=1 built=1 sent=1 unsent=0 pending=0 rejected=- skipped=buffer_full:1" in (
+        caplog.text
+    )
+
+
+@pytest.mark.unit
+async def test_failing_proxy_exits_1_by_exception_type_only(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.DEBUG)
+    proxy = ScriptedProxy([], fail=True)
+
+    assert await run(_proxy_plan(proxy), asyncio.Event(), transport=Body().transport()) == (
+        EXIT_UNSENT
+    )
+    assert "source failed: source=api error=RuntimeError" in caplog.text
+    assert "planted-proxy-detail" not in caplog.text
+
+
+def _proxy_source(port: int, upstream_env: str = "UPSTREAM") -> dict[str, Any]:
+    return {"id": "api", "kind": "http_proxy", "listen_port": port, "upstream_env": upstream_env}
+
+
+def _free_port() -> int:
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        return probe.getsockname()[1]
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("upstream", ["localhost:8020", "ftp://upstream", "http://"])
+def test_proxy_upstream_must_be_an_http_url(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, upstream: str
+) -> None:
+    fire_yml = _configure(tmp_path, [_proxy_source(port=8021)])
+
+    assert _run(fire_yml, _environ(UPSTREAM=upstream)) == EXIT_STARTUP_ERROR
+    assert "source api: UPSTREAM is not an http or https URL" in caplog.text
+    assert upstream not in caplog.text
+
+
+@pytest.mark.unit
+def test_proxy_on_a_busy_port_is_a_startup_error(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    with socket.socket() as busy:
+        busy.bind(("127.0.0.1", 0))
+        busy.listen()
+        port = busy.getsockname()[1]
+        fire_yml = _configure(tmp_path, [_proxy_source(port=port)])
+
+        assert _run(fire_yml, _environ(UPSTREAM="http://localhost:1")) == EXIT_STARTUP_ERROR
+    assert f"source api: cannot listen on 127.0.0.1:{port}" in caplog.text
+
+
+@pytest.mark.unit
+def test_startup_error_after_a_proxy_releases_its_port(tmp_path: Path) -> None:
+    port = _free_port()
+    fire_yml = _configure(tmp_path, [_proxy_source(port), _replay_source()])
+    environ = _environ(UPSTREAM="http://localhost:8020", REPLAY="/nonexistent/records.json")
+
+    assert _run(fire_yml, environ) == EXIT_STARTUP_ERROR
+    with socket.socket() as again:
+        again.bind(("127.0.0.1", port))
+
+
+@pytest.mark.unit
+def test_prepare_opens_a_proxy_with_its_pipeline(tmp_path: Path) -> None:
+    fire_yml = _configure(tmp_path, [_replay_source(), _proxy_source(_free_port())])
+    environ = _environ(_replay_file(tmp_path, []), UPSTREAM="http://localhost:8020")
+
+    plan = prepare("shop", config_path=fire_yml, environ=environ)
+    try:
+        assert [type(planned).__name__ for planned in plan.sources] == [
+            "PlannedSource",
+            "PlannedProxy",
+        ]
+    finally:
+        for planned in plan.sources:
+            if isinstance(planned, PlannedProxy):
+                planned.proxy.close()
 
 
 @pytest.mark.unit

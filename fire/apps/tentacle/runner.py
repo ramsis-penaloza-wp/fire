@@ -24,6 +24,7 @@ from fire.adapters.shapes.flat_star import FlatStarShapeGeneralizer
 from fire.adapters.shapes.sha256 import Sha256ShapeFingerprinter
 from fire.apps.config import (
     EventSourceConfig,
+    HttpProxySourceConfig,
     SourceConfig,
     SystemConfig,
     TentacleConfig,
@@ -32,8 +33,15 @@ from fire.apps.config import (
 )
 from fire.apps.tentacle.counters import SourceCounters
 from fire.apps.tentacle.sender import Outgoing, Sender, settle
-from fire.apps.tentacle.sources import READERS, SourceUnavailable
+from fire.apps.tentacle.sources import READERS, SourceUnavailable, open_http_proxy
+from fire.core.ports.exchange_source import (
+    ExchangeNote,
+    ExchangeSkipReason,
+    ExchangeSource,
+    HttpExchange,
+)
 from fire.core.ports.record_source import RecordSource, StartPosition
+from fire.core.services.exchange_pipeline import ExchangePipeline, PartSkipped
 from fire.core.services.record_pipeline import RecordPipeline, Rejected, Skipped
 
 logger = logging.getLogger(__name__)
@@ -60,11 +68,18 @@ class PlannedSource:
 
 
 @dataclass(frozen=True)
+class PlannedProxy:
+    id: str
+    proxy: ExchangeSource
+    pipeline: ExchangePipeline
+
+
+@dataclass(frozen=True)
 class Plan:
     """What a checked startup runs: the sources to read and where to send."""
 
     system: str
-    sources: list[PlannedSource]
+    sources: list[PlannedSource | PlannedProxy]
     tentacle: TentacleConfig
     url: str
     token: str
@@ -106,14 +121,20 @@ def prepare(
         raise StartupError(f"system {system!r} declares no source {source!r} (declared: {known})")
     chosen = [declared[source]] if source is not None else list(declared.values())
 
-    planned: list[PlannedSource] = []
-    for config in chosen:
-        try:
-            planned.append(_open(config, system_config, start, environ))
-        except _Skip as skip:
-            if source is not None:
-                raise StartupError(f"source {config.id}: {skip}") from None
-            logger.warning("source skipped: source=%s reason=%s", config.id, skip)
+    planned: list[PlannedSource | PlannedProxy] = []
+    try:
+        for config in chosen:
+            try:
+                planned.append(_open(config, system_config, start, environ))
+            except _Skip as skip:
+                if source is not None:
+                    raise StartupError(f"source {config.id}: {skip}") from None
+                logger.warning("source skipped: source=%s reason=%s", config.id, skip)
+    except StartupError:
+        for opened in planned:
+            if isinstance(opened, PlannedProxy):
+                opened.proxy.close()
+        raise
     if not planned:
         raise StartupError(f"system {system!r} has no source to run")
     return Plan(
@@ -154,10 +175,24 @@ def _open(
     system: SystemConfig,
     start: StartPosition,
     environ: Mapping[str, str],
-) -> PlannedSource:
+) -> PlannedSource | PlannedProxy:
     location = environ.get(config.location_env)
     if not location:
         raise _Skip(f"{config.location_env} is not set")
+    if isinstance(config, HttpProxySourceConfig):
+        try:
+            proxy = open_http_proxy(config, location)
+        except SourceUnavailable as error:
+            raise StartupError(f"source {config.id}: {error}") from None
+        exchanges = ExchangePipeline(
+            system=system.system,
+            source=config.id,
+            sample_rate=system.fingerprinting.sample_rate,
+            max_body_bytes=config.max_body_bytes,
+            generalizer=FlatStarShapeGeneralizer(),
+            fingerprinter=Sha256ShapeFingerprinter(),
+        )
+        return PlannedProxy(id=config.id, proxy=proxy, pipeline=exchanges)
     reader = READERS.get(config.kind)
     if reader is None:
         raise _Skip(f"kind {config.kind} has no reader yet")
@@ -242,7 +277,11 @@ async def run(
         reporting = asyncio.create_task(_report(counters, counters_interval_s))
         stopping = asyncio.create_task(stop.wait())
         readers = [
-            asyncio.create_task(_read(planned, queue, counters[planned.id]))
+            asyncio.create_task(
+                _forward(planned, queue, counters[planned.id])
+                if isinstance(planned, PlannedProxy)
+                else _read(planned, queue, counters[planned.id])
+            )
             for planned in plan.sources
         ]
 
@@ -308,6 +347,60 @@ async def _read(
         logger.error("source failed: source=%s error=%s", planned.id, type(error).__name__)
         return False
     return True
+
+
+async def _forward(
+    planned: PlannedProxy, queue: asyncio.Queue[Outgoing | None], counters: SourceCounters
+) -> bool:
+    """Serves one proxy until its task is cancelled; False when it failed."""
+    try:
+        await planned.proxy.serve(_ExchangeCounter(planned.pipeline, queue, counters))
+    except Exception as error:
+        logger.error("source failed: source=%s error=%s", planned.id, type(error).__name__)
+        return False
+    return True
+
+
+async def _nothing_to_ack() -> None:
+    return None
+
+
+class _ExchangeCounter:
+    """The sink a proxy reports to: it shapes each exchange and queues what it built.
+
+    A proxy cannot pause the traffic it forwards, so an observation that finds the queue full
+    is skipped as `buffer_full` instead of waiting. An exchange counts as one `read`.
+    """
+
+    def __init__(
+        self,
+        pipeline: ExchangePipeline,
+        queue: asyncio.Queue[Outgoing | None],
+        counters: SourceCounters,
+    ) -> None:
+        self._pipeline = pipeline
+        self._queue = queue
+        self._counters = counters
+
+    def exchange(self, exchange: HttpExchange) -> None:
+        self._counters.read += 1
+        for outcome in self._pipeline.process(exchange):
+            if isinstance(outcome, PartSkipped):
+                self._counters.skipped[outcome.reason] += 1
+                continue
+            try:
+                self._queue.put_nowait(Outgoing(outcome, _nothing_to_ack))
+            except asyncio.QueueFull:
+                self._counters.skipped["buffer_full"] += 1
+            else:
+                self._counters.built += 1
+
+    def skip(self, reason: ExchangeSkipReason) -> None:
+        self._counters.read += 1
+        self._counters.skipped[reason] += 1
+
+    def note(self, reason: ExchangeNote) -> None:
+        self._counters.noted[reason] += 1
 
 
 async def _report(counters: Mapping[str, SourceCounters], interval_s: float) -> None:

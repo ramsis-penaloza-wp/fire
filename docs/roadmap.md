@@ -5,8 +5,8 @@ The order of work for [ingest-drift-and-feedback.md](specs/ingest-drift-and-feed
 request each, and says for every step what must work, how it is tested, and against what.
 
 Phase 0 is done (repo rules and `config/systems/omg.yml`), and so are steps 1.1, 1.2, 1.3,
-2.1, 2.2, and 2.4 for shape drift; its path drift parts land with steps 1.9 and 2.3. Phases 1
-to 4 keep the spec's numbering.
+1.6, 2.1, 2.2, and 2.4 for shape drift; its path drift parts land with steps 1.9 and 2.3.
+Phases 1 to 4 keep the spec's numbering.
 
 **Scope added here.** The tentacle intercepts everything that enters and leaves OMG, not only
 Kinesis domain events: inbound HTTP, inbound external events, internal domain events, outbound
@@ -252,6 +252,10 @@ fixtures; with `OMG_REPO` set, the test also reads them from OMG. Canary.
 `openapi.json`. L2 posting `test_order_payload.json`, the Springfield payloads, and the RMA
 payloads from `scripts/test_payloads/` through the proxy, as in
 [c. Generate traffic](../dev/omg/README.md#c-generate-traffic).
+
+**Shipped before 1.4.** With no OTLP receiver in FIRE yet, the L2 test checks the join in
+Jaeger: OMG's `SERVER` span is a child of the span id the shapes carry. Step 1.4 moves the
+check into FIRE.
 
 ### 1.7 Transmission captures
 

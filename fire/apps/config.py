@@ -214,12 +214,32 @@ class S3CaptureSourceConfig(_Source):
         return self.bucket_env
 
 
+class HttpProxySourceConfig(_Source):
+    """A reverse proxy in front of an HTTP service. Contract:
+    docs/specs/http-and-span-capture.md#inbound-proxy.
+    """
+
+    kind: Literal["http_proxy"]
+    listen_port: int = Field(ge=1, le=65535)
+    listen_host: str = Field(default="127.0.0.1", min_length=1)
+    # Holds the upstream's base URL, such as http://localhost:8020.
+    upstream_env: EnvName
+    openapi_path: str = Field(default="/openapi.json", pattern=r"^/\S*$")
+    openapi_refresh_s: float = Field(default=300, gt=0)
+    max_body_bytes: int = Field(default=1_048_576, ge=1)
+
+    @property
+    def location_env(self) -> str:
+        return self.upstream_env
+
+
 SourceConfig = Annotated[
     ReplaySourceConfig
     | KinesisSourceConfig
     | DynamoDbStreamSourceConfig
     | SnsFanoutSourceConfig
-    | S3CaptureSourceConfig,
+    | S3CaptureSourceConfig
+    | HttpProxySourceConfig,
     Field(discriminator="kind"),
 ]
 
@@ -256,6 +276,18 @@ class SystemConfig(_Strict):
         duplicates = sorted({source_id for source_id in ids if ids.count(source_id) > 1})
         if duplicates:
             raise ValueError(f"duplicate source ids: {', '.join(duplicates)}")
+        return self
+
+    @model_validator(mode="after")
+    def _listen_addresses_are_unique(self) -> SystemConfig:
+        addresses = [
+            f"{source.listen_host}:{source.listen_port}"
+            for source in self.sources
+            if isinstance(source, HttpProxySourceConfig)
+        ]
+        duplicates = sorted({address for address in addresses if addresses.count(address) > 1})
+        if duplicates:
+            raise ValueError(f"duplicate listen addresses: {', '.join(duplicates)}")
         return self
 
     def source_ids(self) -> frozenset[str]:

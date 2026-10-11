@@ -12,26 +12,26 @@ and do not apply here.
 
 | Path | What lives there |
 |---|---|
-| `fire/core/domain/` | Pydantic models, and the `Baseline` dataclass: `dossier` (`Shape`, `ShapeField`, `ValueType`, `ShapeFingerprint`, `ProcessHop`, `HopVia`, `ProcessPath`, `EvidenceFragment`, `Dossier`), `decision` (`Possibility`, `Decision`), `incident` (`Incident`, `Trigger`), `narration`, `origin`, `inventory` (`SystemInventory`, `CoverageReport`), `observation` (`Channel`, `ShapeObservation`, `SpanObservation`, `SpanLink`, `StreamSummary`, `FingerprintSummary`), `ingest` (`IngestReport`, `IngestCounts`, `Rejection`, `RejectionReason`), `envelope` (`Envelope`, `ValuePath`, `TimestampPath`, `PayloadPath`), `baseline` (`DriftPolicy`, `BaselineStatus`, `Baseline`), `drift` (`FieldRef`, `TypeChange`, `ShapeDiff`, `DriftSignal`, `Admission`, `ShapeAdmission`) |
-| `fire/core/ports/` | Protocols: `Reasoner`, `Narrator`, `Notifier`, `ObservationCatalog`, `ShapeGeneralizer`, `ShapeFingerprinter`, `ManifestParser`, `RecordSource` (with `RawRecord`, `StartPosition`) |
-| `fire/core/services/` | `DiagnosisService` (reasoner, then narrator, then notifier), `IngestService` (checks and stores observations; `ingest` takes an `on_drift` hook per call and calls it once per new drift signal), `DriftIncidentService` (one incident and dossier per new shape drift signal), `RecordPipeline` (raw record to `ShapeObservation` or a reason code), and `coverage` (`audit_coverage`, `CoverageScope`) |
+| `fire/core/domain/` | Pydantic models, and the `Baseline` dataclass: `dossier` (`Shape`, `ShapeField`, `ValueType`, `ShapeFingerprint`, `ProcessHop`, `HopVia`, `ProcessPath`, `EvidenceFragment`, `Dossier`), `decision` (`Possibility`, `Decision`), `incident` (`Incident`, `Trigger`), `narration`, `origin`, `inventory` (`SystemInventory`, `CoverageReport`), `observation` (`Channel`, `ShapeObservation`, `SpanObservation`, `SpanLink`, `StreamSummary`, `FingerprintSummary`), `ingest` (`IngestReport`, `IngestCounts`, `Rejection`, `RejectionReason`), `envelope` (`Envelope`, `ValuePath`, `TimestampPath`, `PayloadPath`), `baseline` (`DriftPolicy`, `BaselineStatus`, `Baseline`), `drift` (`FieldRef`, `TypeChange`, `ShapeDiff`, `DriftSignal`, `Admission`, `ShapeAdmission`), `route_template` (`RouteTemplate`, `Route`, `RouteTable`: a request path to its route template) |
+| `fire/core/ports/` | Protocols: `Reasoner`, `Narrator`, `Notifier`, `ObservationCatalog`, `ShapeGeneralizer`, `ShapeFingerprinter`, `ManifestParser`, `RecordSource` (with `RawRecord`, `StartPosition`), `ExchangeSource` (with `ExchangeSink`, `HttpExchange`, `HttpMessage`, and its skip and note reasons) |
+| `fire/core/services/` | `DiagnosisService` (reasoner, then narrator, then notifier), `IngestService` (checks and stores observations; `ingest` takes an `on_drift` hook per call and calls it once per new drift signal), `DriftIncidentService` (one incident and dossier per new shape drift signal), `RecordPipeline` (raw record to `ShapeObservation` or a reason code), `ExchangePipeline` (HTTP exchange to request and response `ShapeObservation`s or reason codes), and `coverage` (`audit_coverage`, `CoverageScope`) |
 | `fire/adapters/shapes/` | `FlatStarShapeGeneralizer` (JSON to `Shape`), `Sha256ShapeFingerprinter` |
-| `fire/adapters/manifests/` | `EventChainsGraphParser` (`event_chains_graph` document to `SystemInventory`) |
-| `fire/adapters/sources/` | `RecordSource` adapters: `ReplayRecordSource` (`.json`, `.jsonl`, or a directory) |
+| `fire/adapters/manifests/` | `EventChainsGraphParser` (`event_chains_graph` document to `SystemInventory`), `openapi_routes` (OpenAPI 3 document to `Route`s) |
+| `fire/adapters/sources/` | `RecordSource` adapters: `ReplayRecordSource` (`.json`, `.jsonl`, or a directory). `ExchangeSource` adapters: `HttpProxy` (inbound reverse proxy: uvicorn in front, `httpcore` to the upstream) and `listen` |
 | `fire/adapters/memory/` | `MemoryObservationCatalog`: in-process, lost on restart |
 | `fire/adapters/{reasoners,narrators,notifiers}/` | Stubs: `EchoReasoner`, `TemplateNarrator`, `ConsoleNotifier` |
 | `fire/apps/config.py` | YAML to Pydantic: `FireConfig` (`config/fire.yml`, with `TentacleConfig`), `SystemConfig` (`config/systems/*.yml`, with one source model per `kind`) |
 | `fire/apps/discovery.py` | `discover`: per system, an inventory from its manifest or a `missing_reason` |
 | `fire/apps/env.py` | `load_fire_env`: loads `.env`; process env wins |
 | `fire/apps/incident_engine/` | The body. `app.py` (FastAPI: `GET /health`, `POST /v0/diagnose`, `POST /v0/observations`, which opens drift incidents, `GET /v0/systems/{system}/streams`), `wiring.py` (`build_container`, `log_drift`), `__main__.py` |
-| `fire/apps/tentacle/` | `python -m fire.apps.tentacle --system <system>`: `runner.py` (startup checks, run loop, exit codes), `sender.py` (batches, retries), `counters.py`, `sources.py` (`READERS` by kind) |
+| `fire/apps/tentacle/` | `python -m fire.apps.tentacle --system <system>`: `runner.py` (startup checks, run loop, exit codes), `sender.py` (batches, retries), `counters.py`, `sources.py` (`READERS` by kind, `open_http_proxy`) |
 | `config/fire.yml` | Global: API token env var, reasoner, narrator, notifier, tier budgets, tentacle sending |
 | `config/systems/` | One YAML per watched system; `_template.yml` is skipped. `omg.yml` is OMG, the first |
 | `tests/unit/` | Flat `test_<topic>.py` files |
 | `tests/integration/` | API and tentacle tests; the body through `TestClient` or `httpx.ASGITransport`, with config written to `tmp_path` |
 | `tests/conftest.py` | The `canary` fixture; skips `omg_local` tests unless `OMG_REPO` is set |
 | `tests/canary.py` | Canary harness: `Canary` plants unique values and finds leaks; `WIRE_FORMS` per source kind |
-| `tests/fixtures/omg/` | L1 fixtures: `test_payloads/` is copied unchanged from OMG's synthetic test data; `api_requests/` holds request bodies with placeholder values that keep each value type (an `omg_local` test checks the shape matches OMG's) |
+| `tests/fixtures/omg/` | L1 fixtures: `test_payloads/` is copied unchanged from OMG's synthetic test data; `api_requests/` holds request bodies with placeholder values that keep each value type (an `omg_local` test checks the shape matches OMG's); `openapi/` holds the `paths` and operation ids of the `/openapi.json` of OMG's API and validation engine (an `omg_local` test checks them against the live documents) |
 
 ## Specs
 
@@ -44,8 +44,9 @@ and do not apply here.
 | `system-config-and-discovery.md` | `apps/config.py`, `apps/discovery.py`, `inventory`, `coverage`, `adapters/manifests/` |
 | `observations.md` | `core/domain/observation.py`, `core/domain/ingest.py`, `core/services/ingest.py`, `ObservationCatalog` and its memory adapter, the ingest and streams endpoints |
 | `ingest-drift-and-feedback.md` | Its Baseline, Drift rules, and Drift incidents sections: `core/domain/baseline.py`, `core/domain/drift.py`, `core/services/drift_incident.py`, the catalog's baselines and signals, and the drift hook of `POST /v0/observations`. The rest is a proposal: path drift incidents, triggers, feedback; steps in `docs/roadmap.md` |
-| `tentacle.md` | `apps/tentacle/`, `core/domain/envelope.py`, `core/ports/record_source.py`, `core/services/record_pipeline.py`, `adapters/sources/`, source kinds in `apps/config.py`, the canary harness; readers other than `replay` are a proposal |
-| `http-and-span-capture.md`, `flows-and-paths.md` | Proposals: span and HTTP capture, flows and paths |
+| `tentacle.md` | `apps/tentacle/`, `core/domain/envelope.py`, `core/ports/record_source.py`, `core/services/record_pipeline.py`, `adapters/sources/replay.py`, source kinds in `apps/config.py`, the canary harness; readers other than `replay` are a proposal |
+| `http-and-span-capture.md` | Its Inbound proxy section: `adapters/sources/http_proxy.py`, `core/ports/exchange_source.py`, `core/services/exchange_pipeline.py`, `core/domain/route_template.py`, `adapters/manifests/openapi.py`, the `http_proxy` kind. The rest is a proposal: the OTLP receiver and operation names (steps 1.4, 1.5) |
+| `flows-and-paths.md` | Proposal: flows and paths |
 
 ## Dependency rule
 

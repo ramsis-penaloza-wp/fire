@@ -11,6 +11,7 @@ from pydantic import ValidationError
 
 from fire.apps.config import (
     EventSourceConfig,
+    HttpProxySourceConfig,
     ReplaySourceConfig,
     S3CaptureSourceConfig,
     SystemConfig,
@@ -57,6 +58,8 @@ def test_repo_system_configs_are_valid() -> None:
     configs = load_system_configs(SYSTEMS)
     assert "omg" in configs
     assert configs["omg"].source_ids() == {
+        "omg-api",
+        "omg-validation",
         "domain-events",
         "order-domain-events",
         "rx-updates",
@@ -245,6 +248,7 @@ SOURCES: dict[str, tuple[dict[str, Any], str]] = {
         "N",
     ),
     "s3_capture": ({"kind": "s3_capture", "bucket_env": "B", "captures": [CAPTURE]}, "B"),
+    "http_proxy": ({"kind": "http_proxy", "listen_port": 8021, "upstream_env": "U"}, "U"),
 }
 
 
@@ -356,6 +360,69 @@ def test_s3_capture_layouts() -> None:
     ).sources
     assert isinstance(source, S3CaptureSourceConfig)
     assert [capture.layout for capture in source.captures] == layouts
+
+
+@pytest.mark.unit
+def test_http_proxy_defaults() -> None:
+    [source] = SystemConfig.model_validate(_minimal(sources=[_source("http_proxy")])).sources
+    assert isinstance(source, HttpProxySourceConfig)
+    assert (source.listen_host, source.listen_port) == ("127.0.0.1", 8021)
+    assert source.openapi_path == "/openapi.json"
+    assert source.openapi_refresh_s == 300
+    assert source.max_body_bytes == 1_048_576
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [
+        ("listen_port", 0),
+        ("listen_port", 65536),
+        ("listen_host", ""),
+        ("openapi_path", "openapi.json"),
+        ("openapi_path", "/open api.json"),
+        ("openapi_refresh_s", 0),
+        ("max_body_bytes", 0),
+        ("direction", "inbound"),
+        ("envelope", ENVELOPE),
+    ],
+)
+def test_http_proxy_checks_its_keys(key: str, value: Any) -> None:
+    locs = _source_error_locs(_source("http_proxy", **{key: value}))
+    assert locs == [("sources", 0, "http_proxy", key)]
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("key", ["listen_port", "upstream_env"])
+def test_http_proxy_needs_a_port_and_an_upstream(key: str) -> None:
+    source = _source("http_proxy")
+    del source[key]
+    assert _source_error_locs(source) == [("sources", 0, "http_proxy", key)]
+
+
+@pytest.mark.unit
+def test_http_proxies_need_unique_listen_addresses() -> None:
+    sources = [
+        _source("http_proxy", id="api"),
+        _source("http_proxy", id="other-host", listen_host="0.0.0.0"),
+        _source("http_proxy", id="same", upstream_env="V"),
+    ]
+    with pytest.raises(ValidationError, match="duplicate listen addresses: 127.0.0.1:8021"):
+        SystemConfig.model_validate(_minimal(sources=sources))
+
+
+@pytest.mark.unit
+def test_omg_proxies_sit_in_front_of_the_api_and_the_validation_engine() -> None:
+    sources = {source.id: source for source in load_system_configs(SYSTEMS)["omg"].sources}
+    proxies = {
+        source_id: (source.listen_port, source.location_env)
+        for source_id, source in sources.items()
+        if isinstance(source, HttpProxySourceConfig)
+    }
+    assert proxies == {
+        "omg-api": (8021, "OMG_API_UPSTREAM"),
+        "omg-validation": (8031, "OMG_VALIDATION_UPSTREAM"),
+    }
 
 
 @pytest.mark.unit
