@@ -1,0 +1,19 @@
+{
+  "openapi": "3.0.2",
+  "info": {
+    "title": "item-rx-validation-service-",
+    "version": "v0.0.1"
+  },
+  "paths": {
+    "/v1/validate": {
+      "post": {
+        "operationId": "validate_batch_v1_validate_post"
+      }
+    },
+    "/healthcheck": {
+      "get": {
+        "operationId": "healthcheck_healthcheck_get"
+      }
+    }
+  }
+}

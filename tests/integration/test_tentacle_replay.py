@@ -89,7 +89,7 @@ def test_second_replay_adds_only_duplicates(
     assert _streams() == first
     assert (
         "source=work-unit-samples read=4 built=4 sent=4 unsent=0 pending=0 rejected=- "
-        "skipped=- body_duplicate=4 body_rejected=-"
+        "skipped=- noted=- body_duplicate=4 body_rejected=-"
     ) in caplog.text
 
 

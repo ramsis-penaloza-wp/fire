@@ -18,8 +18,13 @@ discovery:
     path_env: OMG_MANIFEST_PATH
 
 # Where the tentacle reads. Contract: docs/specs/tentacle.md#sources-in-the-system-yaml.
-# Only `replay` has a reader so far; the tentacle skips the others and says so.
+# `replay` and `http_proxy` run so far; the tentacle skips the others and says so.
 sources:
+  # Inbound HTTP: post to the proxy port instead of the service's. Route templates come from
+  # each upstream's /openapi.json. Contract: docs/specs/http-and-span-capture.md#inbound-proxy.
+  - {id: omg-api, kind: http_proxy, listen_port: 8021, upstream_env: OMG_API_UPSTREAM}
+  - {id: omg-validation, kind: http_proxy, listen_port: 8031,
+     upstream_env: OMG_VALIDATION_UPSTREAM}
   # DomainEvents. kinesis-publisher runs in every region, so one `id` (the work unit's
   # work_unit_id) arrives from both streams and counts once.
   - id: domain-events

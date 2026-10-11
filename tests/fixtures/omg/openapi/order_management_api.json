@@ -1,0 +1,466 @@
+{
+  "openapi": "3.0.2",
+  "info": {
+    "title": "order-management-api-",
+    "version": "v0.0.1"
+  },
+  "paths": {
+    "/v1/orders/search": {
+      "get": {
+        "operationId": "search_orders_v1_orders_search_get"
+      }
+    },
+    "/v1/orders/place_order": {
+      "post": {
+        "operationId": "place_order_v1_orders_place_order_post"
+      }
+    },
+    "/v1/orders/{order_id}": {
+      "get": {
+        "operationId": "get_order_v1_orders__order_id__get"
+      }
+    },
+    "/v1/orders/{order_id}/logs": {
+      "get": {
+        "operationId": "get_order_logs_v1_orders__order_id__logs_get"
+      }
+    },
+    "/v1/orders/{order_id}/returns": {
+      "get": {
+        "operationId": "get_order_returns_v1_orders__order_id__returns_get"
+      }
+    },
+    "/v1/orders/{order_id}/shipments": {
+      "get": {
+        "operationId": "get_order_shipments_v1_orders__order_id__shipments_get"
+      }
+    },
+    "/v1/orders/{order_id}/items/{item_id}/refund-destinations": {
+      "get": {
+        "operationId": "get_refund_destinations_v1_orders__order_id__items__item_id__refund_destinations_get"
+      }
+    },
+    "/v1/orders/{order_id}/transmissions": {
+      "get": {
+        "operationId": "get_order_transmissions_v1_orders__order_id__transmissions_get"
+      }
+    },
+    "/v1/orders/{order_id}/transmissions/{work_unit_id}/files": {
+      "get": {
+        "operationId": "get_order_transmission_files_v1_orders__order_id__transmissions__work_unit_id__files_get"
+      }
+    },
+    "/v1/orders/{order_id}/order-services-snapshot/preview": {
+      "get": {
+        "operationId": "preview_order_services_snapshot_v1_orders__order_id__order_services_snapshot_preview_get"
+      }
+    },
+    "/v1/orders/order-services-snapshot/preview": {
+      "post": {
+        "operationId": "preview_order_services_snapshot_batch_v1_orders_order_services_snapshot_preview_post"
+      }
+    },
+    "/v1/orders/reporting-status/vocabulary": {
+      "get": {
+        "operationId": "get_reporting_status_vocabulary_v1_orders_reporting_status_vocabulary_get"
+      }
+    },
+    "/v1/orders/{order_id}/reporting-status/preview": {
+      "get": {
+        "operationId": "preview_reporting_status_v1_orders__order_id__reporting_status_preview_get"
+      }
+    },
+    "/v1/orders/{order_id}/email-preview/{preview_key}": {
+      "get": {
+        "operationId": "get_order_email_preview_v1_orders__order_id__email_preview__preview_key__get"
+      }
+    },
+    "/v1/orders/{order_id}/oracle-local-view": {
+      "get": {
+        "operationId": "get_oracle_local_view_v1_orders__order_id__oracle_local_view_get"
+      }
+    },
+    "/v1/orders/{order_id}/oracle-remote": {
+      "get": {
+        "operationId": "get_oracle_remote_view_v1_orders__order_id__oracle_remote_get"
+      }
+    },
+    "/v1/orders/{order_id}/actions/{action_type}/eligibility": {
+      "post": {
+        "operationId": "check_action_eligibility_v1_orders__order_id__actions__action_type__eligibility_post"
+      }
+    },
+    "/v1/orders/{order_id}/actions/{action_type}": {
+      "post": {
+        "operationId": "execute_order_action_v1_orders__order_id__actions__action_type__post"
+      }
+    },
+    "/v1/springfield-orders/{order_id}": {
+      "get": {
+        "operationId": "get_springfield_order_v1_springfield_orders__order_id__get"
+      }
+    },
+    "/v1/failed-checkouts": {
+      "get": {
+        "operationId": "list_failed_checkouts_v1_failed_checkouts_get"
+      }
+    },
+    "/v1/failed-checkouts/error-analysis": {
+      "get": {
+        "operationId": "get_failed_checkout_error_analysis_v1_failed_checkouts_error_analysis_get"
+      }
+    },
+    "/v1/failed-checkouts/{checkout_id}": {
+      "get": {
+        "operationId": "get_failed_checkout_v1_failed_checkouts__checkout_id__get"
+      },
+      "put": {
+        "operationId": "save_failed_checkout_v1_failed_checkouts__checkout_id__put"
+      }
+    },
+    "/v1/failed-checkouts/{checkout_id}/refresh-totals": {
+      "post": {
+        "operationId": "refresh_failed_checkout_totals_v1_failed_checkouts__checkout_id__refresh_totals_post"
+      }
+    },
+    "/v1/failed-checkouts/{checkout_id}/refresh-insurance": {
+      "post": {
+        "operationId": "refresh_failed_checkout_insurance_v1_failed_checkouts__checkout_id__refresh_insurance_post"
+      }
+    },
+    "/v1/failed-checkouts/batch-reprocess": {
+      "post": {
+        "operationId": "reprocess_failed_checkouts_v1_failed_checkouts_batch_reprocess_post"
+      }
+    },
+    "/v1/failed-checkouts/reprocess-by-error": {
+      "post": {
+        "operationId": "reprocess_failed_checkouts_by_error_v1_failed_checkouts_reprocess_by_error_post"
+      }
+    },
+    "/v1/failed-checkouts/batch-delete": {
+      "post": {
+        "operationId": "delete_failed_checkouts_v1_failed_checkouts_batch_delete_post"
+      }
+    },
+    "/v1/orders/{order_id}/items/{item_id}/allocation/preview": {
+      "post": {
+        "operationId": "preview_allocation_change_v1_orders__order_id__items__item_id__allocation_preview_post"
+      }
+    },
+    "/v1/orders/{order_id}/items/{item_id}/allocation": {
+      "post": {
+        "operationId": "create_allocation_change_v1_orders__order_id__items__item_id__allocation_post"
+      }
+    },
+    "/v1/users/me": {
+      "get": {
+        "operationId": "get_user_info_v1_users_me_get"
+      }
+    },
+    "/v1/tasks/filter-options": {
+      "get": {
+        "operationId": "get_task_filter_options_v1_tasks_filter_options_get"
+      }
+    },
+    "/v1/tasks/{work_unit_id}": {
+      "get": {
+        "operationId": "get_task_v1_tasks__work_unit_id__get"
+      }
+    },
+    "/v1/tasks": {
+      "get": {
+        "operationId": "list_tasks_v1_tasks_get"
+      }
+    },
+    "/v1/tasks/close": {
+      "post": {
+        "operationId": "close_tasks_v1_tasks_close_post"
+      }
+    },
+    "/v1/tasks/redrive": {
+      "post": {
+        "operationId": "redrive_tasks_v1_tasks_redrive_post"
+      }
+    },
+    "/v1/tasks/{work_unit_id}/triage": {
+      "post": {
+        "operationId": "add_task_triage_v1_tasks__work_unit_id__triage_post"
+      }
+    },
+    "/v1/cto/options": {
+      "get": {
+        "operationId": "get_cto_options_v1_cto_options_get"
+      }
+    },
+    "/v1/cto/frame-options/{frame_assembly_id}": {
+      "get": {
+        "operationId": "get_frame_options_v1_cto_frame_options__frame_assembly_id__get"
+      }
+    },
+    "/v1/cto/configuration/resolve": {
+      "post": {
+        "operationId": "resolve_configuration_v1_cto_configuration_resolve_post"
+      }
+    },
+    "/v1/cto/frames/search": {
+      "get": {
+        "operationId": "search_frames_v1_cto_frames_search_get"
+      }
+    },
+    "/v1/classification/resolve": {
+      "post": {
+        "operationId": "resolve_classification_v1_classification_resolve_post"
+      }
+    },
+    "/v1/scheduled-jobs/latest": {
+      "get": {
+        "operationId": "list_latest_job_executions_v1_scheduled_jobs_latest_get"
+      }
+    },
+    "/v1/scheduled-jobs": {
+      "get": {
+        "operationId": "list_all_job_executions_v1_scheduled_jobs_get"
+      }
+    },
+    "/v1/scheduled-jobs/rules": {
+      "get": {
+        "operationId": "list_scheduled_rules_v1_scheduled_jobs_rules_get"
+      }
+    },
+    "/v1/scheduled-jobs/{job_name}/trigger": {
+      "post": {
+        "operationId": "trigger_job_v1_scheduled_jobs__job_name__trigger_post"
+      }
+    },
+    "/v1/scheduled-jobs/{job_name}": {
+      "get": {
+        "operationId": "list_job_executions_v1_scheduled_jobs__job_name__get"
+      }
+    },
+    "/v1/scheduled-jobs/{job_name}/{exec_id}": {
+      "get": {
+        "operationId": "get_job_execution_v1_scheduled_jobs__job_name___exec_id__get"
+      }
+    },
+    "/v1/scheduled-jobs/{job_name}/{exec_id}/retry": {
+      "post": {
+        "operationId": "retry_job_execution_v1_scheduled_jobs__job_name___exec_id__retry_post"
+      }
+    },
+    "/v1/scheduled-jobs/{job_name}/{exec_id}/close": {
+      "post": {
+        "operationId": "close_job_execution_v1_scheduled_jobs__job_name___exec_id__close_post"
+      }
+    },
+    "/v1/scheduled-jobs/{job_name}/{exec_id}/children/{child_id}/retry": {
+      "post": {
+        "operationId": "retry_child_execution_v1_scheduled_jobs__job_name___exec_id__children__child_id__retry_post"
+      }
+    },
+    "/v1/scheduled-jobs/{job_name}/{exec_id}/children/{child_id}/close": {
+      "post": {
+        "operationId": "close_child_execution_v1_scheduled_jobs__job_name___exec_id__children__child_id__close_post"
+      }
+    },
+    "/v1/fulfillment-changes": {
+      "get": {
+        "operationId": "list_fulfillment_changes_v1_fulfillment_changes_get"
+      }
+    },
+    "/v1/fulfillment-changes/export": {
+      "get": {
+        "operationId": "export_fulfillment_changes_v1_fulfillment_changes_export_get"
+      }
+    },
+    "/v1/fulfillment-changes/{change_request_id}": {
+      "get": {
+        "operationId": "get_fulfillment_change_v1_fulfillment_changes__change_request_id__get"
+      }
+    },
+    "/v1/fulfillment-changes/{change_request_id}/retry": {
+      "post": {
+        "operationId": "retry_fulfillment_change_v1_fulfillment_changes__change_request_id__retry_post"
+      }
+    },
+    "/v1/bulk-reallocation/preview": {
+      "post": {
+        "operationId": "preview_bulk_reallocation_v1_bulk_reallocation_preview_post"
+      }
+    },
+    "/v1/bulk-reallocation": {
+      "post": {
+        "operationId": "create_bulk_reallocation_v1_bulk_reallocation_post"
+      }
+    },
+    "/v1/customer_pick_up/quality_control_reasons": {
+      "get": {
+        "operationId": "quality_control_reasons_v1_customer_pick_up_quality_control_reasons_get"
+      }
+    },
+    "/v1/customer_pick_up/incoming_shipments": {
+      "get": {
+        "operationId": "incoming_shipments_v1_customer_pick_up_incoming_shipments_get"
+      }
+    },
+    "/v1/customer_pick_up/bulk_pick_up": {
+      "post": {
+        "operationId": "bulk_pick_up_v1_customer_pick_up_bulk_pick_up_post"
+      }
+    },
+    "/v1/reshipment_reasons": {
+      "get": {
+        "operationId": "reshipment_reasons_v1_reshipment_reasons_get"
+      }
+    },
+    "/v1/orders/{order_id}/reshipments/create": {
+      "post": {
+        "operationId": "create_reshipment_v1_orders__order_id__reshipments_create_post"
+      }
+    },
+    "/v1/event-chains": {
+      "get": {
+        "operationId": "get_event_chains_graph_v1_event_chains_get"
+      }
+    },
+    "/v1/domain-events/schemas/list": {
+      "get": {
+        "operationId": "list_schemas_v1_domain_events_schemas_list_get"
+      }
+    },
+    "/v1/domain-events/schemas/envelope": {
+      "get": {
+        "operationId": "get_domain_event_envelope_schema_v1_domain_events_schemas_envelope_get"
+      }
+    },
+    "/v1/domain-events/schemas/{event_type}": {
+      "get": {
+        "operationId": "get_domain_event_schema_v1_domain_events_schemas__event_type__get"
+      }
+    },
+    "/v1/validation/rules": {
+      "get": {
+        "operationId": "get_validation_rules_v1_validation_rules_get"
+      }
+    },
+    "/v1/prescriptions/search/{customer_id}": {
+      "get": {
+        "operationId": "search_customer_prescriptions_v1_prescriptions_search__customer_id__get"
+      }
+    },
+    "/v1/facility-lens-mappings": {
+      "get": {
+        "operationId": "list_facility_lens_mappings_v1_facility_lens_mappings_get"
+      },
+      "post": {
+        "operationId": "create_facility_lens_mapping_v1_facility_lens_mappings_post"
+      }
+    },
+    "/v1/facility-lens-mappings/{pc_product_id}/{facility_add_power_surfaced}": {
+      "put": {
+        "operationId": "update_facility_lens_mapping_v1_facility_lens_mappings__pc_product_id___facility_add_power_surfaced__put"
+      },
+      "delete": {
+        "operationId": "delete_facility_lens_mapping_v1_facility_lens_mappings__pc_product_id___facility_add_power_surfaced__delete"
+      }
+    },
+    "/v1/pre-orders/dispatch-dates": {
+      "get": {
+        "operationId": "list_pre_order_dispatch_dates_v1_pre_orders_dispatch_dates_get"
+      },
+      "put": {
+        "operationId": "upsert_pre_order_dispatch_dates_v1_pre_orders_dispatch_dates_put"
+      }
+    },
+    "/v1/pre-orders/dispatch-dates/{pc_product_id}": {
+      "get": {
+        "operationId": "get_pre_order_dispatch_date_v1_pre_orders_dispatch_dates__pc_product_id__get"
+      }
+    },
+    "/v1/pre-orders/release": {
+      "post": {
+        "operationId": "release_pre_orders_v1_pre_orders_release_post"
+      }
+    },
+    "/v1/receipts/{token}": {
+      "get": {
+        "operationId": "download_receipt_v1_receipts__token__get"
+      }
+    },
+    "/v1/shipment-labels/{token}": {
+      "get": {
+        "operationId": "download_shipment_label_v1_shipment_labels__token__get"
+      }
+    },
+    "/v1/test/wms_payload/{order_id}": {
+      "get": {
+        "operationId": "generate_wms_payload_v1_test_wms_payload__order_id__get"
+      }
+    },
+    "/v1/test/lms_payload/{order_id}": {
+      "get": {
+        "operationId": "generate_lms_payload_v1_test_lms_payload__order_id__get"
+      }
+    },
+    "/v1/test/transmit_to_wms/{order_id}": {
+      "post": {
+        "operationId": "transmit_to_wms_v1_test_transmit_to_wms__order_id__post"
+      }
+    },
+    "/v1/test/orders/{order_id}/status": {
+      "patch": {
+        "operationId": "set_order_status_v1_test_orders__order_id__status_patch"
+      }
+    },
+    "/v1/test/orders/{order_id}/seed_fulfillment_requests": {
+      "post": {
+        "operationId": "seed_fulfillment_requests_v1_test_orders__order_id__seed_fulfillment_requests_post"
+      }
+    },
+    "/v1/test/fulfillment-events": {
+      "post": {
+        "operationId": "publish_fulfillment_event_v1_test_fulfillment_events_post"
+      }
+    },
+    "/v1/test/fulfillment-events/rma-receive": {
+      "post": {
+        "operationId": "publish_rma_receive_v1_test_fulfillment_events_rma_receive_post"
+      }
+    },
+    "/v1/test/wms-payload/{external_id}": {
+      "get": {
+        "operationId": "get_wms_payload_by_external_id_v1_test_wms_payload__external_id__get"
+      }
+    },
+    "/v1/test/wms-confirmations/pick": {
+      "post": {
+        "operationId": "simulate_pick_confirmation_v1_test_wms_confirmations_pick_post"
+      }
+    },
+    "/v1/test/wms-confirmations/pack": {
+      "post": {
+        "operationId": "simulate_pack_confirmation_v1_test_wms_confirmations_pack_post"
+      }
+    },
+    "/v1/test/wms-confirmations/ship": {
+      "post": {
+        "operationId": "simulate_ship_confirmation_v1_test_wms_confirmations_ship_post"
+      }
+    },
+    "/v1/test/wms-confirmations/order-release": {
+      "post": {
+        "operationId": "simulate_order_release_confirmation_v1_test_wms_confirmations_order_release_post"
+      }
+    },
+    "/v1/test/fr-external-ids": {
+      "post": {
+        "operationId": "mint_local_fr_external_ids_v1_test_fr_external_ids_post"
+      }
+    },
+    "/healthcheck": {
+      "get": {
+        "operationId": "healthcheck_healthcheck_get"
+      }
+    }
+  }
+}

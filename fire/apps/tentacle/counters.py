@@ -10,7 +10,8 @@ from dataclasses import dataclass, field
 class SourceCounters:
     """`sent + unsent + pending = built` at all times; `pending` is what is not settled yet.
 
-    `rejected` and `skipped` count the tentacle's reasons; `body_duplicate` and
+    `rejected` and `skipped` count the tentacle's reasons; `noted` counts events that build or
+    drop nothing, such as an invalid `traceparent` the proxy forwarded; `body_duplicate` and
     `body_rejected` count what the body answered for observations it took.
     """
 
@@ -21,6 +22,7 @@ class SourceCounters:
     unsent: int = 0
     rejected: Counter[str] = field(default_factory=Counter)
     skipped: Counter[str] = field(default_factory=Counter)
+    noted: Counter[str] = field(default_factory=Counter)
     body_duplicate: int = 0
     body_rejected: Counter[str] = field(default_factory=Counter)
 
@@ -32,8 +34,8 @@ class SourceCounters:
         return (
             f"source={self.source} read={self.read} built={self.built} sent={self.sent} "
             f"unsent={self.unsent} pending={self.pending} rejected={_reasons(self.rejected)} "
-            f"skipped={_reasons(self.skipped)} body_duplicate={self.body_duplicate} "
-            f"body_rejected={_reasons(self.body_rejected)}"
+            f"skipped={_reasons(self.skipped)} noted={_reasons(self.noted)} "
+            f"body_duplicate={self.body_duplicate} body_rejected={_reasons(self.body_rejected)}"
         )
 
 
