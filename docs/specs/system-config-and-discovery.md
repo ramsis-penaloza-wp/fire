@@ -165,18 +165,27 @@ is sorted.
 `is_complete` is true when all three are empty. An event in `ignore` leaves both gap lists;
 an ignored name that is observed but undeclared is a valid reference.
 
+`CoverageScope`, in the same module, holds what one system's audit needs: exactly one of
+`inventory` and `missing_reason`, and the system's `policy.critical` and `policy.ignore`. A
+scope with both or neither raises `ValueError`. `build_container` builds one per system from
+its `Discovery` and `policy` for drift incidents
+([Drift incidents](ingest-drift-and-feedback.md#drift-incidents)).
+
 Against OMG's graph, observing only the events that `kinesis-publisher` consumes leaves 39
 of 125 in `declared_unseen`: reading Kinesis alone does not cover OMG.
 
 ## Follow-ups
 
 - The tentacle ([tentacle.md](tentacle.md)) reads `replay` sources and feeds observed events
-  into the catalog; the other kinds follow in roadmap steps 1.7 and 1.8. Nothing calls
-  `audit_coverage` with real observations yet.
+  into the catalog; the other kinds follow in roadmap steps 1.7 and 1.8. Since step 2.4, each
+  shape drift incident runs `audit_coverage` with the system's observed event types
+  ([Drift incidents](ingest-drift-and-feedback.md#drift-incidents)); the coverage endpoint is
+  step 2.5.
 - Manifest refresh: discovery runs once at startup; a redeploy of the watched system is not
   picked up until FIRE restarts.
-- A Slack notifier that posts to `notify.slack.channel_id`. Today `Incident.project_id` is
-  not mapped to a `system`, so the notifier cannot pick a channel yet.
+- A Slack notifier that posts to `notify.slack.channel_id`. Since step 2.4, `Incident.system`
+  names a loaded system, so the notifier can pick the channel; the Slack notifier itself is
+  roadmap step 3.6.
 - A third coverage list for events that exist but pass through no source FIRE reads; it
   needs each source to declare which events it carries.
 - `fingerprinting.sample_rate` is applied by the tentacle

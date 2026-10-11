@@ -5,6 +5,7 @@ Contract: docs/specs/observations.md#ingest-endpoint.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable, Collection, Mapping, Sequence
 
 from pydantic import BaseModel, ValidationError
@@ -14,6 +15,8 @@ from fire.core.domain.ingest import IngestCounts, IngestReport, Rejection, Rejec
 from fire.core.domain.observation import ShapeObservation, SpanObservation
 from fire.core.ports.observation_catalog import ObservationCatalog
 from fire.core.ports.shape_fingerprinter import ShapeFingerprinter
+
+logger = logging.getLogger(__name__)
 
 # Called once per new drift signal with the observation that raised it.
 DriftHook = Callable[[ShapeObservation, DriftSignal], None]
@@ -26,9 +29,6 @@ class IngestService:
     that system's sources, and for a shape the recomputed fingerprint equals the one sent. An
     item that passes is offered to the catalog, which counts it `accepted` or `duplicate`. A
     rejected item is not stored and holds no dedupe key.
-
-    After the whole batch is counted, `on_drift` is called once for each drift signal the batch
-    raised, in batch order. A later occurrence of a signal calls nothing.
     """
 
     def __init__(
@@ -36,15 +36,25 @@ class IngestService:
         catalog: ObservationCatalog,
         fingerprinter: ShapeFingerprinter,
         sources: Mapping[str, Collection[str]],
-        on_drift: DriftHook | None = None,
     ) -> None:
         """`sources` maps each loaded system to its source ids."""
         self._catalog = catalog
         self._fingerprinter = fingerprinter
         self._sources = sources
-        self._on_drift = on_drift
 
-    def ingest(self, shapes: Sequence[object], spans: Sequence[object]) -> IngestReport:
+    def ingest(
+        self,
+        shapes: Sequence[object],
+        spans: Sequence[object],
+        on_drift: DriftHook | None = None,
+    ) -> IngestReport:
+        """Checks, stores, and counts one batch.
+
+        After the whole batch is counted, `on_drift` is called once for each drift signal the
+        batch raised, in batch order. A later occurrence of a signal and a rejected item call
+        nothing. A call that raises is logged with names only, and the next signals still run:
+        the batch is stored, so a resend would count as duplicates and never raise them again.
+        """
         raised: list[tuple[ShapeObservation, DriftSignal]] = []
 
         def add_shape(observation: ShapeObservation) -> bool:
@@ -57,9 +67,20 @@ class IngestService:
             shapes=_count(shapes, ShapeObservation, self._check_shape, add_shape),
             spans=_count(spans, SpanObservation, self._check_source, self._catalog.add_span),
         )
-        if self._on_drift is not None:
+        if on_drift is not None:
             for observation, signal in raised:
-                self._on_drift(observation, signal)
+                try:
+                    on_drift(observation, signal)
+                except Exception as error:
+                    # The error's message is not logged: it may quote the shape.
+                    logger.error(
+                        "drift hook failed: system=%s source=%s stream=%s fingerprint=%s error=%s",
+                        observation.system,
+                        observation.source,
+                        observation.channel.key,
+                        signal.schema_hash,
+                        type(error).__name__,
+                    )
         return report
 
     def _check_source(

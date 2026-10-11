@@ -9,7 +9,7 @@ from fire.core.domain.narration import Narration
 
 class TemplateNarrator:
     async def narrate(self, dossier: Dossier, decision: Decision) -> Narration:
-        scope = dossier.project_id + (f"/{dossier.service}" if dossier.service else "")
+        scope = dossier.system + (f"/{dossier.service}" if dossier.service else "")
         lines = [
             f"*FIRE ENGINE* incident `{decision.incident_id}` (`{scope}`)",
             f"Confidence: {decision.confidence:.0%}"

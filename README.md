@@ -111,7 +111,7 @@ Jev/Laya **decides**; the **Narrator** only writes readable prose for Slack.
 Scaffold **v0** is in tree: hexagonal `fire/{core,adapters,apps}`, ports
 Reasoner ≠ Narrator ≠ Notifier, Echo/Template/Console stubs, FastAPI
 `POST /v0/diagnose` (auth fail-closed), config templates, unit tests.
-The engine computes a shape fingerprint when a shape arrives without one, validates
+The engine recomputes the fingerprint of every shape it receives, validates
 `config/systems/*.yml` at startup, and discovers each system's inventory from its
 manifest (`event_chains_graph` format) for the coverage audit. OMG is the first
 watched system (`config/systems/omg.yml`; set `OMG_MANIFEST_PATH` to its event graph).
@@ -161,11 +161,14 @@ No fail-open “secret optional” mode outside an explicit local-dev override.
 ### Available today
 
 - `GET /health` — liveness (unauthenticated).
-- `POST /v0/diagnose` — submit an incident (`X-FIRE-Token` required); `202` with an
-  `incident_id`, diagnosis runs in the background.
+- `POST /v0/diagnose` — submit a `manual` incident for a loaded `system` (`X-FIRE-Token`
+  required); the fingerprint of a `shape` is recomputed and a different client one is `422`;
+  `202` with an `incident_id`, diagnosis runs in the background
+  (`docs/specs/dossier-and-decision.md`).
 - `POST /v0/observations` — ingest shape and span observations (`X-FIRE-Token` required);
   `202` with accepted, duplicate, and rejected counts per list
-  (`docs/specs/observations.md`).
+  (`docs/specs/observations.md`). Each new shape drift signal opens a drift incident,
+  diagnosed in the background (`docs/specs/ingest-drift-and-feedback.md`).
 - `GET /v0/systems/{system}/streams` — baseline status and samples, observation and
   fingerprint counts, and open shape drift signals, per stream key (`X-FIRE-Token` required).
 

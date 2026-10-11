@@ -23,7 +23,7 @@ def client(monkeypatch: pytest.MonkeyPatch):
 
 @pytest.mark.unit
 def test_diagnose_missing_token_401(client: TestClient) -> None:
-    response = client.post("/v0/diagnose", json={"project_id": "example"})
+    response = client.post("/v0/diagnose", json={"system": "omg"})
     assert response.status_code == 401
 
 
@@ -31,7 +31,7 @@ def test_diagnose_missing_token_401(client: TestClient) -> None:
 def test_diagnose_bad_token_401(client: TestClient) -> None:
     response = client.post(
         "/v0/diagnose",
-        json={"project_id": "example"},
+        json={"system": "omg"},
         headers={"X-FIRE-Token": "wrong"},
     )
     assert response.status_code == 401
@@ -51,7 +51,7 @@ def test_diagnose_bad_token_compared_in_constant_time(
     monkeypatch.setattr(hmac, "compare_digest", spy)
     response = client.post(
         "/v0/diagnose",
-        json={"project_id": "example"},
+        json={"system": "omg"},
         headers={"X-FIRE-Token": "wrong"},
     )
     assert response.status_code == 401
@@ -62,7 +62,7 @@ def test_diagnose_bad_token_compared_in_constant_time(
 def test_diagnose_non_ascii_token_401(client: TestClient) -> None:
     response = client.post(
         "/v0/diagnose",
-        json={"project_id": "example"},
+        json={"system": "omg"},
         headers={"X-FIRE-Token": "wrong-tökén".encode()},
     )
     assert response.status_code == 401
@@ -75,7 +75,32 @@ def test_diagnose_unset_token_env_503(monkeypatch: pytest.MonkeyPatch) -> None:
     with TestClient(app) as test_client:
         response = test_client.post(
             "/v0/diagnose",
-            json={"project_id": "example"},
+            json={"system": "omg"},
+            headers={"X-FIRE-Token": "anything"},
+        )
+    app_module._container = None
+    assert response.status_code == 503
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("headers", [{}, {"X-FIRE-Token": "wrong"}], ids=["missing", "wrong"])
+def test_diagnose_bad_token_401_before_unknown_system(
+    client: TestClient, headers: dict[str, str]
+) -> None:
+    response = client.post("/v0/diagnose", json={"system": "unknown"}, headers=headers)
+    assert response.status_code == 401
+
+
+@pytest.mark.unit
+def test_diagnose_unset_token_env_503_before_unknown_system(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("FIRE_API_TOKEN", raising=False)
+    app_module._container = build_container()
+    with TestClient(app) as test_client:
+        response = test_client.post(
+            "/v0/diagnose",
+            json={"system": "unknown"},
             headers={"X-FIRE-Token": "anything"},
         )
     app_module._container = None
@@ -87,7 +112,7 @@ def test_diagnose_ok_202(client: TestClient) -> None:
     response = client.post(
         "/v0/diagnose",
         json={
-            "project_id": "example",
+            "system": "omg",
             "service": "api",
             "fingerprint": {"schema_hash": "abc"},
             "process_hops": [{"ref": "api", "operation": "POST /x"}],
@@ -97,5 +122,5 @@ def test_diagnose_ok_202(client: TestClient) -> None:
     assert response.status_code == 202
     body = response.json()
     assert body["status"] == "accepted"
-    assert body["project_id"] == "example"
+    assert body["system"] == "omg"
     assert body["service"] == "api"

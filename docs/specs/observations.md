@@ -20,7 +20,9 @@ stream's `status` and `samples` (`fire/core/domain/baseline.py`); the baseline's
 [Baseline](ingest-drift-and-feedback.md#baseline). Step 2.2 added shape drift: `add_shape`
 returns a `ShapeAdmission`, `IngestService` calls `on_drift` once per new signal, and each
 stream lists its open signals (`fire/core/domain/drift.py`); the contract is
-[Drift rules](ingest-drift-and-feedback.md#drift-rules).
+[Drift rules](ingest-drift-and-feedback.md#drift-rules). Step 2.4 moved `on_drift` to
+`IngestService.ingest`, passed per call, and the ingest endpoint's hook opens a drift incident
+([Drift incidents](ingest-drift-and-feedback.md#drift-incidents)).
 
 ## Channel
 
@@ -179,12 +181,14 @@ in one batch give one `accepted` and one `duplicate`.
 
 `IngestService` (`fire/core/services/ingest.py`) runs the checks against the loaded systems'
 `sources[].id`; the response models (`IngestReport`, `IngestCounts`, `Rejection`,
-`RejectionReason`) are in `fire/core/domain/ingest.py`. Its optional `on_drift` hook is called
-once per drift signal the batch raised, after the whole batch is counted, in batch order. Each
-batch logs one `INFO` line with the six counts and nothing else, plus one `INFO` line per new
-drift signal from the body's `log_drift` hook, with names and counts only
-([Drift rules](ingest-drift-and-feedback.md#drift-rules)). Drift does not change the response
-format.
+`RejectionReason`) are in `fire/core/domain/ingest.py`. `ingest(shapes, spans, on_drift=None)`
+calls its optional hook once per drift signal the batch raised, after the whole batch is
+counted, in batch order. Each batch logs one `INFO` line with the six counts and nothing else.
+For each new drift signal, the endpoint's hook logs one more `INFO` line with `log_drift`, with
+names and counts only ([Drift rules](ingest-drift-and-feedback.md#drift-rules)), and opens a
+drift incident whose diagnosis runs in a background task after the response
+([Drift incidents](ingest-drift-and-feedback.md#drift-incidents)). Drift does not change the
+response format.
 
 ```json
 {"shapes": {"accepted": 41, "duplicate": 2,
@@ -309,8 +313,10 @@ and `tests/integration/test_observations_api.py`, and the L1 test
 `tests/integration/test_order_payload_drift.py`. Its fixture,
 `tests/fixtures/omg/api_requests/test_order_payload.json`, is OMG's place-order request body
 copied with placeholder values that keep every value type, so its shape equals OMG's; an
-`omg_local` test checks that. Integration tests use `TestClient` with config written to
-`tmp_path`.
+`omg_local` test checks that. Step 2.4 added cases in `tests/unit/test_observation_ingest.py`
+for the hook passed per call; its other tests are in
+[Drift incidents](ingest-drift-and-feedback.md#drift-incidents). Integration tests use
+`TestClient` with config written to `tmp_path`.
 
 | Step | Level | Proves |
 |------|-------|--------|
@@ -326,6 +332,7 @@ copied with placeholder values that keep every value type, so its shape equals O
 | 2.2 | L0 | `on_drift` is called once per new signal with the observation that raised it, after the whole batch is counted, in batch order, and never for a later occurrence or a rejected item; drifted items count as `accepted`; the drift models reject unknown keys at every depth, empty type lists, zero occurrences, and naive datetimes; `log_drift` writes one `INFO` line with counts and no paths |
 | 2.2 | L1 | 20 variants of OMG's place-order request toggling `adminId`, `adminName`, and `partyId` warm the request stream with no drift, and a combination never seen folds silently; a copy without `timezone` and with an integer `referenceOrderId` raises one signal with that diff, and 100 copies are one signal with 100 occurrences and one log line; removing a required `checkoutId`, or `totals` with its children, reports only those removals; no placeholder value reaches `/streams`, the logs, or the catalog |
 | 2.2 | Integration | A different shape on a rebuilding stream folds and raises nothing; a drifted shape on a warm stream is `accepted` and listed under `drift` with its exact diff, with `samples` lower than `observations`; sent again, it adds occurrences and logs one line without its paths; a duplicate of it adds no occurrence |
+| 2.4 | L0 | Each `ingest` call reports its own signals to the hook passed with it, by 2.2's rules; a call without a hook still records the drift; a hook call that raises logs one `ERROR` line without the exception's message, and the next signal's call still runs |
 
 ## Open questions
 

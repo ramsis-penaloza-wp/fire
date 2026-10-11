@@ -5,7 +5,8 @@ The order of work for [ingest-drift-and-feedback.md](specs/ingest-drift-and-feed
 request each, and says for every step what must work, how it is tested, and against what.
 
 Phase 0 is done (repo rules and `config/systems/omg.yml`), and so are steps 1.1, 1.2, 1.3,
-2.1, and 2.2. Phases 1 to 4 keep the spec's numbering.
+2.1, 2.2, and 2.4 for shape drift; its path drift parts land with steps 1.9 and 2.3. Phases 1
+to 4 keep the spec's numbering.
 
 **Scope added here.** The tentacle intercepts everything that enters and leaves OMG, not only
 Kinesis domain events: inbound HTTP, inbound external events, internal domain events, outbound
@@ -20,7 +21,7 @@ its section into the contract of the shipped code.
 | [observations.md](specs/observations.md): channels, observation models, ingest endpoint, catalog | 1.1, 1.2 |
 | [tentacle.md](specs/tentacle.md): process, sender, record sources, envelope, canary | 1.3, 1.7, 1.8 |
 | [http-and-span-capture.md](specs/http-and-span-capture.md): OTLP receiver, span allowlist, operation names, inbound proxy | 1.4, 1.5, 1.6 |
-| [flows-and-paths.md](specs/flows-and-paths.md): trace assembly, flows, paths, path drift | 1.9, 2.3 |
+| [flows-and-paths.md](specs/flows-and-paths.md): trace assembly, flows, paths, path drift | 1.9, 2.3, 2.4 |
 | [dev/omg/README.md](../dev/omg/README.md): OMG's local stack with FIRE attached (L2) | 1.4, 1.6 to 1.8, 1.10, 2.6 |
 
 ## Rules for every step
@@ -319,6 +320,9 @@ paths, shapes on flows, and the paths endpoint.
 - Shape observations attached to their span, by `span_id` or, for captures and events, by
   `work_id`.
 - `GET /v0/systems/{system}/paths`.
+- The mapping from a complete flow to the dossier's `ProcessPath`
+  ([Process path in the dossier](specs/flows-and-paths.md#process-path-in-the-dossier)), with
+  `via` on edge hops.
 
 **Done when:**
 
@@ -399,33 +403,54 @@ rules:
 | `hop_missing` | An operation reached by at least `required_ratio` of flows is absent from a completed flow |
 | `hop_failing` | An operation with no errors in the baseline returns errors |
 
+**Delivers.** The rules and their signals. A flow that fires at least one new signal opens one
+incident with `trigger: path_drift`, whose dossier holds one `path_drift` fragment per signal
+the flow fired and the flow's process path. The trigger and `EchoReasoner`'s `path_drift`
+possibilities ship in 2.4.
+
 **Done when:**
 
 - Synthetic and recorded flows with one hop removed or added produce one signal each.
 - Incomplete flows produce none.
+- Several new signals from one flow give one notification.
 
 **Test.** L0. L1 with the recorded place-order trace minus its Oracle call.
 
 ### 2.4 Drift incidents
 
 **Spec.** [Drift incidents](specs/ingest-drift-and-feedback.md#drift-incidents) and
-[Changes to existing code](specs/ingest-drift-and-feedback.md#changes-to-existing-code):
-`project_id` becomes `system`, `Incident` gains `trigger` (with `path_drift` next to
-`shape_drift`), the echo label is fixed, and `/v0/diagnose` recomputes a client fingerprint.
-[Process path in the dossier](specs/flows-and-paths.md#process-path-in-the-dossier) maps a
-flow to `ProcessPath`.
+[Changes to existing code](specs/ingest-drift-and-feedback.md#changes-to-existing-code), and in
+[dossier-and-decision.md](specs/dossier-and-decision.md) the
+[Incident](specs/dossier-and-decision.md#incident),
+[Diagnose endpoint](specs/dossier-and-decision.md#diagnose-endpoint), and
+[EchoReasoner](specs/dossier-and-decision.md#echoreasoner) sections.
 
-**Delivers.** A drift signal opens an incident. The dossier carries `shape_drift`,
-`path_drift`, `baseline`, and `coverage` fragments, and its process path comes from the flow.
-`EchoReasoner` builds one possibility per drift fragment, and the console notifier prints it.
+**Delivers:**
+
+- Shape drift incidents end to end: a new shape drift signal opens one incident with
+  `trigger: shape_drift`, diagnosed in a background task of `POST /v0/observations`. Its dossier
+  carries `shape_drift`, `baseline`, and `coverage` fragments, and a missing `process_path`.
+- `project_id` becomes `system` on `Incident`, `Dossier`, and `/v0/diagnose`, which rejects a
+  system that is not loaded and recomputes a client fingerprint from its shape. `Incident`
+  gains a required `trigger`; `/v0/diagnose` opens `manual` incidents.
+- `EchoReasoner` builds one possibility per drift fragment and its `unknown` label is fixed. The
+  console notifier names the incident's system and trigger.
+- Path drift parts that need no flows: the `path_drift` trigger, `EchoReasoner`'s `path_drift`
+  possibilities, and `via` on edge hops of `ProcessHop`.
+
+**Moved.** The mapping from a flow to the dossier's `ProcessPath` is delivered by
+[1.9](#19-trace-assembly-and-paths), and opening path drift incidents by
+[2.3](#23-path-drift).
 
 **Done when:**
 
 - An integration test posts a baseline batch and a drifted batch to `/v0/observations` and
-  captures exactly one console notification naming the channel and the diff.
+  captures exactly one console notification naming the channel and the diff; 99 more copies
+  give no second one.
 - `/v0/diagnose` works with `system`.
 
-**Test.** Integration with `TestClient` and captured stdout.
+**Test.** L0 for the incident service, the reasoner, the notifier, and the changed models.
+Integration with `TestClient` and captured stdout.
 
 ### 2.5 Coverage
 

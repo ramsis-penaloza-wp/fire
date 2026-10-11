@@ -11,7 +11,7 @@ from fire.core.domain.inventory import (
     DeclaredProcessor,
     SystemInventory,
 )
-from fire.core.services.coverage import audit_coverage
+from fire.core.services.coverage import CoverageScope, audit_coverage
 
 
 def _inventory(*names: str) -> SystemInventory:
@@ -75,3 +75,23 @@ def test_references_to_unknown_names_are_reported() -> None:
 def test_nothing_observed_lists_every_declared_event() -> None:
     report = audit_coverage(_inventory("b", "a"), [])
     assert report.declared_unseen == ["a", "b"]
+
+
+@pytest.mark.unit
+def test_coverage_scope_holds_an_inventory_or_a_missing_reason() -> None:
+    scope = CoverageScope(inventory=_inventory("a"), critical=("a",), ignore=("b",))
+    assert (scope.missing_reason, scope.critical, scope.ignore) == (None, ("a",), ("b",))
+    assert CoverageScope(inventory=None, missing_reason="no manifest").inventory is None
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("inventory", "missing_reason"),
+    [(_inventory("a"), "no manifest"), (None, None)],
+    ids=["both", "neither"],
+)
+def test_coverage_scope_rejects_both_or_neither(
+    inventory: SystemInventory | None, missing_reason: str | None
+) -> None:
+    with pytest.raises(ValueError, match="exactly one"):
+        CoverageScope(inventory=inventory, missing_reason=missing_reason)

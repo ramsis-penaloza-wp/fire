@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from fire.core.domain.dossier import ProcessHop
+from fire.core.domain.dossier import HopVia, ProcessHop
 from fire.core.domain.origin import Origin, OriginKind
 
 
@@ -39,6 +39,7 @@ def test_process_hop_identity_fields_are_ref_from_ref_to_ref() -> None:
         "operation",
         "span_kind",
         "status",
+        "via",
     }
 
 
@@ -89,6 +90,42 @@ def test_process_hop_cannot_be_node_and_edge(fields: dict[str, str]) -> None:
 
 
 @pytest.mark.unit
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"from_ref": "orig-a", "to_ref": "orig-b", "via": "child"},
+        {"from_ref": "orig-a", "to_ref": "orig-b", "via": "link"},
+        {"from_ref": "orig-a", "via": "link"},
+        {"to_ref": "orig-b", "via": "child"},
+    ],
+    ids=["edge-child", "edge-link", "edge-from-only-link", "edge-to-only-child"],
+)
+def test_process_hop_via_is_accepted_on_edge_hops(fields: dict[str, str]) -> None:
+    assert ProcessHop(**fields).via is HopVia(fields["via"])
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("via", ["child", "link"])
+def test_process_hop_via_is_rejected_on_a_node_hop(via: str) -> None:
+    with pytest.raises(ValidationError, match="via"):
+        ProcessHop(ref="api", via=via)
+
+
+@pytest.mark.unit
+def test_process_hop_via_rejects_an_unknown_value() -> None:
+    with pytest.raises(ValidationError, match="via"):
+        ProcessHop(from_ref="orig-a", to_ref="orig-b", via="sibling")
+
+
+@pytest.mark.unit
+def test_process_hop_json_round_trip_keeps_via() -> None:
+    hop = ProcessHop(from_ref="orig-a", to_ref="orig-b", operation="POST /x", via=HopVia.LINK)
+    dumped = hop.model_dump_json()
+    assert '"via":"link"' in dumped
+    assert ProcessHop.model_validate_json(dumped) == hop
+
+
+@pytest.mark.unit
 @pytest.mark.asyncio
 async def test_echo_uses_ref_labels_without_new_prob_logic() -> None:
     from fire.adapters.reasoners.echo import EchoReasoner
@@ -96,7 +133,7 @@ async def test_echo_uses_ref_labels_without_new_prob_logic() -> None:
 
     dossier = Dossier(
         incident_id="inc-a",
-        project_id="proj-a",
+        system="proj-a",
         origin=Origin(origin_id="orig-a", kind=OriginKind.HTTP, endpoint_ref="ep-a"),
         fingerprint=ShapeFingerprint(schema_hash="h1"),
         process_path=ProcessPath(hops=[ProcessHop(from_ref="orig-a", to_ref="orig-b")]),

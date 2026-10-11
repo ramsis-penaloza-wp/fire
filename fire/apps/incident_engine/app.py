@@ -15,7 +15,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from fire.apps.env import load_fire_env
-from fire.apps.incident_engine.wiring import Container, build_container
+from fire.apps.incident_engine.wiring import Container, build_container, log_drift
 from fire.core.domain.dossier import (
     Dossier,
     EvidenceFragment,
@@ -25,7 +25,9 @@ from fire.core.domain.dossier import (
     Shape,
     ShapeFingerprint,
 )
-from fire.core.domain.incident import Incident
+from fire.core.domain.drift import DriftSignal
+from fire.core.domain.incident import Incident, Trigger
+from fire.core.domain.observation import ShapeObservation
 from fire.core.domain.origin import Origin
 
 logger = logging.getLogger(__name__)
@@ -70,9 +72,9 @@ class ObservationBatch(BaseModel):
 
 
 class DiagnoseRequest(BaseModel):
-    """Edge ingest — project-scoped; Origin + nested shape; hops by reference."""
+    """Edge ingest — system-scoped; Origin + nested shape; hops by reference."""
 
-    project_id: str
+    system: str
     service: str | None = None
     summary: str | None = None
     origin: Origin | None = None
@@ -115,6 +117,7 @@ async def health() -> dict[str, str]:
 )
 async def ingest_observations(
     request: Request,
+    background_tasks: BackgroundTasks,
     x_fire_token: str | None = Header(default=None, alias="X-FIRE-Token"),
 ) -> dict[str, Any]:
     container = get_container()
@@ -130,7 +133,13 @@ async def ingest_observations(
                 for detail in error.errors(include_input=False, include_context=False)
             ]
         ) from None
-    report = container.ingest.ingest(batch.shapes, batch.spans)
+
+    def open_drift_incident(observation: ShapeObservation, signal: DriftSignal) -> None:
+        log_drift(observation, signal)
+        incident, dossier = container.drift_incidents.open_shape_drift(observation, signal)
+        background_tasks.add_task(_run_pipeline, incident, dossier)
+
+    report = container.ingest.ingest(batch.shapes, batch.spans, on_drift=open_drift_incident)
     logger.info(
         "observations ingested: shapes accepted=%d duplicate=%d rejected=%d, "
         "spans accepted=%d duplicate=%d rejected=%d",
@@ -180,18 +189,26 @@ async def diagnose(
 ) -> dict[str, Any]:
     container = get_container()
     _require_token(x_fire_token, container.config.api.token_env)
+    if body.system not in container.systems:
+        raise RequestValidationError([{"loc": ("body", "system"), "type": "unknown_system"}])
+    shape = body.shape
+    fingerprint = body.fingerprint
+    if shape is not None:
+        computed = container.fingerprinter.fingerprint(shape)
+        if fingerprint is not None and fingerprint != computed:
+            raise RequestValidationError(
+                [{"loc": ("body", "fingerprint"), "type": "fingerprint_mismatch"}]
+            )
+        fingerprint = computed
 
     incident_id = str(uuid.uuid4())
     incident = Incident(
         id=incident_id,
-        project_id=body.project_id,
+        system=body.system,
+        trigger=Trigger.MANUAL,
         service=body.service,
         summary=body.summary,
     )
-    shape = body.shape
-    fingerprint = body.fingerprint
-    if shape is not None and fingerprint is None:
-        fingerprint = container.fingerprinter.fingerprint(shape)
     origin = body.origin
     fragments: list[EvidenceFragment] = []
     if origin is None:
@@ -212,7 +229,7 @@ async def diagnose(
         )
     dossier = Dossier(
         incident_id=incident_id,
-        project_id=body.project_id,
+        system=body.system,
         service=body.service,
         origin=origin,
         shape=shape,
@@ -224,7 +241,7 @@ async def diagnose(
     return {
         "status": "accepted",
         "incident_id": incident_id,
-        "project_id": body.project_id,
+        "system": body.system,
         "service": body.service,
         "origin_id": origin.origin_id if origin else None,
     }

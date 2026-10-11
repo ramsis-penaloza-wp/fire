@@ -6,7 +6,10 @@ path drift. Spans and shapes arrive as `SpanObservation`s and `ShapeObservation`
 [http-and-span-capture.md](http-and-span-capture.md)). Shape baselines and drift are in
 [ingest-drift-and-feedback.md](ingest-drift-and-feedback.md#phase-2-drift).
 
-**Status: proposal.** Roadmap steps 1.9 and 2.3 implement it; each step's pull request turns the
+**Status: proposal**, except four pieces step 2.4 shipped: `ProcessHop.via`
+([ProcessHop](dossier-and-decision.md#processhop)), the `path_drift` trigger,
+`EchoReasoner`'s `path_drift` possibilities, and the `No complete flow` fragment of shape drift
+dossiers. Roadmap steps 1.9 and 2.3 implement the rest; each step's pull request turns the
 matching section into the contract of the shipped code.
 
 ## Terms
@@ -195,18 +198,19 @@ A complete flow becomes the dossier's `ProcessPath`. Spans of one node merge int
 | Flow element | `ProcessHop` |
 |--------------|--------------|
 | Node | `ref`: service; `operation`; `span_kind`: kind of its first span; `status` |
-| Edge between two services, or any `link` edge | `from_ref` and `to_ref`: services; `operation` and `span_kind` of the `to` node; `status` of the traversals |
+| Edge between two services, or any `link` edge | `from_ref` and `to_ref`: services; `via`: the edge's `child` or `link`; `operation` and `span_kind` of the `to` node; `status` of the traversals |
 
 `status` is `error` when any span counted is in error, else `ok`, then the highest `status_code`
 among them when one is set: `ok 201`, `error 502`. A `child` edge within one service gives no hop.
 Hops sort by the earliest `start` of the spans they stand for; an edge sorts just before its `to`
-node; ties sort by service, then operation. `ProcessHop` cannot mark a link, so step 2.4 adds an
-optional `via` (`child`, `link`) to edge hops and updates
-[dossier-and-decision.md](dossier-and-decision.md).
+node; ties sort by service, then operation. `ProcessHop.via` exists since step 2.4
+([ProcessHop](dossier-and-decision.md#processhop)); step 1.9 delivers this mapping.
 
-A path drift incident takes the flow that raised its new signals; other triggers choose in their
-own steps. A dossier with no complete flow has an empty `process_path` and a `process_path`
-fragment with quality `missing` and summary `No complete flow`.
+A path drift incident takes the flow that raised its new signals (step 2.3); other triggers
+choose in their own steps. A dossier with no complete flow has an empty `process_path` and a
+`process_path` fragment with quality `missing` and summary `No complete flow`. Until step 1.9,
+every shape drift dossier carries that fragment
+([Drift incidents](ingest-drift-and-feedback.md#drift-incidents)).
 
 ## Path drift
 
@@ -225,9 +229,11 @@ A flow that fires any rule is not folded. Each firing is a drift signal keyed by
 trace ids. A later flow firing the same key adds an occurrence and notifies nothing.
 Acknowledgement, which folds the hop into the path, is phase 4.
 
-A flow that fires at least one new signal opens one incident with `trigger: path_drift`, a new
-trigger next to `shape_drift`. Its dossier holds one `path_drift` fragment per signal the flow
-fired, new or not, so a lost processor that takes several nodes with it is one notification:
+A flow that fires at least one new signal opens one incident with `trigger: path_drift`. The
+trigger exists since step 2.4 ([Incident](dossier-and-decision.md#incident)); step 2.3 opens the
+incident. Its dossier holds the flow's process path and one `path_drift` fragment per signal the
+flow fired, new or not, so a lost processor that takes several nodes with it is one
+notification:
 
 ```json
 {"collector": "path_drift", "quality": "present",
@@ -244,14 +250,19 @@ fired, new or not, so a lost processor that takes several nodes with it is one n
 `node_flows` and `node_errors` are the path's counts, `0` for `hop_added`; `flow_spans` and
 `flow_errors` are the drifted flow's. Trace ids open the flow in a trace viewer and hold no value.
 
+Since step 2.4, `EchoReasoner` builds one possibility per `present` `path_drift` fragment,
+labelled `<rule>: <node operation> on <entry operation>`
+([EchoReasoner](dossier-and-decision.md#echoreasoner)). The fragment above gives
+`hop_missing: sales_order_processor.process_work_unit on POST /v1/orders/place_order`.
+
 ## Tests
 
 | Step | Level | Proves |
 |------|-------|--------|
-| 1.9 | L0 | With an injected clock and no sleeps: a synthetic tree folds into one path with child edges and counts; a linked trace joins whether it arrives before or after its target; a span after `settle_s` is late and changes nothing; a `client` root, an `internal` root whose link never resolves, and an `internal` span whose parent never arrives are orphans; two local roots make a flow broken; both caps count what they drop; duplicates do not extend settle; a `server` span whose parent is a proxy id is the entry and gets the proxy's shapes; shapes attach by span, by trace, or by `work_id`, or are counted; the `ProcessPath` mapping |
+| 1.9 | L0 | With an injected clock and no sleeps: a synthetic tree folds into one path with child edges and counts; a linked trace joins whether it arrives before or after its target; a span after `settle_s` is late and changes nothing; a `client` root, an `internal` root whose link never resolves, and an `internal` span whose parent never arrives are orphans; two local roots make a flow broken; both caps count what they drop; duplicates do not extend settle; a `server` span whose parent is a proxy id is the entry and gets the proxy's shapes; shapes attach by span, by trace, or by `work_id`, or are counted; the `ProcessPath` mapping, with `via` on edge hops |
 | 1.9 | L1 | The place-order recording from step 1.4, mapped to `SpanObservation`s, gives one path from `POST /v1/orders/place_order` through the DynamoDB write, the listener by its link, SNS, the processors, and their partner calls; two recordings give the same nodes and edges |
 | 1.9 | L2 | `omg_local`: after `make test-order` and the processor targets, `/paths` shows that path, and a canary order leaves no canary in it |
-| 2.3 | L0 | One case per rule; nothing below `min_samples`; `required_ratio` at its boundary; a drifted flow is not folded; 100 drifted flows are one signal with 100 occurrences; open, orphan, truncated, and broken flows raise nothing; several new signals from one flow open one incident |
+| 2.3 | L0 | One case per rule; nothing below `min_samples`; `required_ratio` at its boundary; a drifted flow is not folded; 100 drifted flows are one signal with 100 occurrences; open, orphan, truncated, and broken flows raise nothing; several new signals from one flow open one incident whose dossier holds one `path_drift` fragment per signal and the flow's process path |
 | 2.3 | L1 | The recording minus its Oracle call fires `hop_missing` for each node removed and opens one incident; with a partner span added, `hop_added`; with an error on a partner span, `hop_failing` |
 
 ## Open questions

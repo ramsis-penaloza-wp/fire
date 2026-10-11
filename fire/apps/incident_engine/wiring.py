@@ -19,7 +19,9 @@ from fire.core.domain.observation import ShapeObservation
 from fire.core.ports.manifest_parser import ManifestParser
 from fire.core.ports.observation_catalog import ObservationCatalog
 from fire.core.ports.shape_fingerprinter import ShapeFingerprinter
+from fire.core.services.coverage import CoverageScope
 from fire.core.services.diagnosis import DiagnosisService
+from fire.core.services.drift_incident import DriftIncidentService
 from fire.core.services.ingest import IngestService
 
 logger = logging.getLogger(__name__)
@@ -34,6 +36,7 @@ class Container:
     fingerprinter: ShapeFingerprinter
     catalog: ObservationCatalog
     ingest: IngestService
+    drift_incidents: DriftIncidentService
     systems: dict[str, SystemConfig] = field(default_factory=dict)
     discoveries: dict[str, Discovery] = field(default_factory=dict)
 
@@ -90,12 +93,23 @@ def build_container(config_path: Path | None = None) -> Container:
     fingerprinter = Sha256ShapeFingerprinter()
     catalog = MemoryObservationCatalog({name: system.drift for name, system in systems.items()})
     sources = {name: system.source_ids() for name, system in systems.items()}
+    discoveries = {name: discover(system, parsers) for name, system in systems.items()}
+    scopes = {
+        name: CoverageScope(
+            inventory=discoveries[name].inventory,
+            missing_reason=discoveries[name].missing_reason,
+            critical=tuple(system.policy.critical),
+            ignore=tuple(system.policy.ignore),
+        )
+        for name, system in systems.items()
+    }
     return Container(
         config=config,
         diagnosis=diagnosis,
         fingerprinter=fingerprinter,
         catalog=catalog,
-        ingest=IngestService(catalog, fingerprinter, sources, on_drift=log_drift),
+        ingest=IngestService(catalog, fingerprinter, sources),
+        drift_incidents=DriftIncidentService(catalog, scopes),
         systems=systems,
-        discoveries={name: discover(system, parsers) for name, system in systems.items()},
+        discoveries=discoveries,
     )
