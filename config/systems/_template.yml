@@ -56,7 +56,14 @@ fingerprinting:
   sample_rate: 0.02
 
 # Baselines and shape drift. Until min_samples observations fold, a stream is
-# `baseline rebuilding` and raises no drift.
+# `baseline rebuilding` and raises no drift. Paths of flows read the same thresholds.
 drift:
   min_samples: 20                    # observations folded before a stream is warm
   required_ratio: 1.0                # share of samples that makes a field required, in (0, 1]
+
+# Flows: spans grouped from an entry operation across async hops, folded into one path per
+# entry. Contract: docs/specs/flows-and-paths.md
+paths:
+  settle_s: 60                       # a flow completes after this long with no span joining it
+  max_open_flows: 10000              # one more evicts the open flow joined least recently
+  max_spans_per_flow: 1000           # more are dropped and the flow is truncated

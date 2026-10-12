@@ -1,4 +1,6 @@
-"""Port: where accepted observations are kept, each once, and summarized per stream key."""
+"""Port: where accepted observations are kept, each once, summarized per stream key, and
+assembled into flows and paths.
+"""
 
 from __future__ import annotations
 
@@ -6,6 +8,7 @@ from typing import Protocol, runtime_checkable
 
 from fire.core.domain.drift import ShapeAdmission
 from fire.core.domain.observation import ShapeObservation, SpanObservation, StreamSummary
+from fire.core.domain.path import PathDrift, PathsReport
 
 
 @runtime_checkable
@@ -26,7 +29,13 @@ class ObservationCatalog(Protocol):
     its open drift signals; each summary's fingerprints are sorted by `observations`
     descending, then `schema_hash`. A system with no observations has none.
 
-    Contract: docs/specs/observations.md#observationcatalog.
+    Every stored span joins its system's flows, and every stored shape with a trace or work id
+    joins them too, on the catalog's clock at acceptance. `complete_flows` completes the flows
+    of every system that settled by that clock, folds them into their paths or compares them,
+    and returns one `PathDrift` per flow that fired a new path drift signal. `paths` returns a
+    system's open flow count, counters, and paths; it completes nothing.
+
+    Contract: docs/specs/observations.md#observationcatalog and docs/specs/flows-and-paths.md.
     """
 
     def add_shape(self, observation: ShapeObservation) -> ShapeAdmission: ...
@@ -34,3 +43,7 @@ class ObservationCatalog(Protocol):
     def add_span(self, observation: SpanObservation) -> bool: ...
 
     def streams(self, system: str) -> list[StreamSummary]: ...
+
+    def complete_flows(self) -> list[PathDrift]: ...
+
+    def paths(self, system: str) -> PathsReport: ...

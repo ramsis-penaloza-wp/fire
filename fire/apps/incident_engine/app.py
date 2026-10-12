@@ -1,12 +1,16 @@
-"""FastAPI edge: every /v0 route requires X-FIRE-Token; ingest and diagnose answer 202."""
+"""FastAPI edge: every /v0 route requires X-FIRE-Token; ingest and diagnose answer 202.
+
+While the app runs, settled flows complete every second, and before `/paths` answers.
+"""
 
 from __future__ import annotations
 
+import asyncio
 import hmac
 import logging
 import os
 import uuid
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from typing import Any
 
 from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Request
@@ -15,7 +19,12 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from fire.apps.env import load_fire_env
-from fire.apps.incident_engine.wiring import Container, build_container, log_drift
+from fire.apps.incident_engine.wiring import (
+    Container,
+    build_container,
+    log_drift,
+    log_path_drift,
+)
 from fire.core.domain.dossier import (
     Dossier,
     EvidenceFragment,
@@ -31,6 +40,9 @@ from fire.core.domain.observation import ShapeObservation
 from fire.core.domain.origin import Origin
 
 logger = logging.getLogger(__name__)
+
+# How often the running app completes settled flows.
+COMPLETE_EVERY_S = 1.0
 
 _container: Container | None = None
 
@@ -48,8 +60,14 @@ async def lifespan(_app: FastAPI):
     # read os.environ.
     load_fire_env()
     _container = build_container()
-    yield
-    _container = None
+    completing = asyncio.create_task(_complete_flows_forever())
+    try:
+        yield
+    finally:
+        completing.cancel()
+        with suppress(asyncio.CancelledError):
+            await completing
+        _container = None
 
 
 app = FastAPI(title="FIRE ENGINE", version="0.1.0", lifespan=lifespan)
@@ -98,6 +116,38 @@ def _require_token(x_fire_token: str | None, token_env: str) -> None:
 
 async def _run_pipeline(incident: Incident, dossier: Dossier) -> None:
     await get_container().diagnosis.run(incident, dossier)
+
+
+def _complete_flows(container: Container) -> list[tuple[Incident, Dossier]]:
+    """Completes settled flows, and opens one incident per flow that fired a new path drift
+    signal; the caller runs their diagnoses.
+    """
+    runs: list[tuple[Incident, Dossier]] = []
+    for drift in container.catalog.complete_flows():
+        log_path_drift(drift)
+        runs.append(container.drift_incidents.open_path_drift(drift))
+    return runs
+
+
+async def _complete_flows_forever() -> None:
+    """Every `COMPLETE_EVERY_S`, completes settled flows and diagnoses their incidents in turn.
+
+    A failure is logged with its exception type, never its message, and the loop goes on.
+    """
+    while True:
+        await asyncio.sleep(COMPLETE_EVERY_S)
+        try:
+            runs = _complete_flows(get_container())
+        except Exception as error:
+            logger.error("flow completion failed: error=%s", type(error).__name__)
+            continue
+        for incident, dossier in runs:
+            try:
+                await _run_pipeline(incident, dossier)
+            except Exception as error:
+                logger.error(
+                    "diagnosis failed: incident=%s error=%s", incident.id, type(error).__name__
+                )
 
 
 @app.get("/health")
@@ -179,6 +229,21 @@ async def streams(
             for stream in container.catalog.streams(system)
         ],
     }
+
+
+@app.get("/v0/systems/{system}/paths")
+async def paths(
+    system: str,
+    background_tasks: BackgroundTasks,
+    x_fire_token: str | None = Header(default=None, alias="X-FIRE-Token"),
+) -> dict[str, Any]:
+    container = get_container()
+    _require_token(x_fire_token, container.config.api.token_env)
+    if system not in container.systems:
+        raise HTTPException(status_code=404, detail="unknown system")
+    for incident, dossier in _complete_flows(container):
+        background_tasks.add_task(_run_pipeline, incident, dossier)
+    return container.catalog.paths(system).model_dump(mode="json", by_alias=True)
 
 
 @app.post("/v0/diagnose", status_code=202)

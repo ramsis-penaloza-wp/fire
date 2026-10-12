@@ -215,6 +215,47 @@ def test_template_declares_a_drift_policy() -> None:
     assert (drift.min_samples, drift.required_ratio) == (20, 1.0)
 
 
+PATHS = {"settle_s": 60, "max_open_flows": 10000, "max_spans_per_flow": 1000}
+
+
+@pytest.mark.unit
+def test_paths_default_when_absent() -> None:
+    paths = SystemConfig.model_validate(_minimal()).paths
+    assert paths.model_dump() == PATHS
+
+
+@pytest.mark.unit
+def test_paths_load_from_yaml(tmp_path: Path) -> None:
+    config = load_system_config(
+        _write(tmp_path, "example.yml", _minimal(paths={"settle_s": 5, "max_open_flows": 1}))
+    )
+    assert config.paths.model_dump() == {
+        "settle_s": 5,
+        "max_open_flows": 1,
+        "max_spans_per_flow": 1000,
+    }
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [("settle_s", 0.5), ("max_open_flows", 0), ("max_spans_per_flow", 0), ("window_s", 5)],
+    ids=["settle-below-one", "open-zero", "spans-zero", "unknown"],
+)
+def test_paths_reject_values_below_one_and_unknown_keys(key: str, value: float) -> None:
+    with pytest.raises(ValidationError) as caught:
+        SystemConfig.model_validate(_minimal(paths={key: value}))
+    assert [error["loc"] for error in caught.value.errors()] == [("paths", key)]
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("path", [SYSTEMS / "omg.yml", TEMPLATE], ids=["omg", "template"])
+def test_omg_and_the_template_declare_paths_at_their_defaults(path: Path) -> None:
+    raw = yaml.safe_load(path.read_text())
+    assert raw["paths"] == PATHS
+    assert SystemConfig.model_validate(raw).paths.model_dump() == PATHS
+
+
 CAPTURE = {"prefix": "partner-payloads/", "label": "partner", "layout": "work_unit_action"}
 
 # One valid source per kind, with the env var that names what it reads.

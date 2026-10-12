@@ -93,7 +93,16 @@ sources:
 fingerprinting:
   sample_rate: 1.0
 
-# Baselines and shape drift: docs/specs/ingest-drift-and-feedback.md#baseline.
+# Baselines and shape drift: docs/specs/ingest-drift-and-feedback.md#baseline. Paths read the
+# same thresholds: a path is warm after min_samples folded flows, and a hop every flow reached
+# is required.
 drift:
   min_samples: 20      # observations folded before a stream is warm and may raise drift
   required_ratio: 1.0  # a field every sample carried is required
+
+# When flows settle: docs/specs/flows-and-paths.md#completion. Locally a place order's last
+# span arrives seconds after its first.
+paths:
+  settle_s: 60              # a flow completes after this long with no span joining it
+  max_open_flows: 10000     # one more evicts the open flow joined least recently
+  max_spans_per_flow: 1000  # more are dropped and the flow is truncated

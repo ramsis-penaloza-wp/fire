@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import logging
+from collections import Counter
+from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 
 from fire.adapters.manifests.event_chains_graph import EventChainsGraphParser
@@ -16,6 +19,7 @@ from fire.apps.config import FireConfig, SystemConfig, load_fire_config, load_sy
 from fire.apps.discovery import Discovery, check_manifest_kinds, discover
 from fire.core.domain.drift import DriftSignal
 from fire.core.domain.observation import ShapeObservation
+from fire.core.domain.path import PathDrift, PathDriftRule
 from fire.core.ports.manifest_parser import ManifestParser
 from fire.core.ports.observation_catalog import ObservationCatalog
 from fire.core.ports.shape_fingerprinter import ShapeFingerprinter
@@ -61,7 +65,26 @@ def log_drift(observation: ShapeObservation, signal: DriftSignal) -> None:
     )
 
 
-def build_container(config_path: Path | None = None) -> Container:
+def log_path_drift(drift: PathDrift) -> None:
+    """One INFO line per flow that fires a new path drift signal, with its entry and counts."""
+    rules = Counter(firing.signal.rule for firing in drift.firings)
+    logger.info(
+        "path drift raised: system=%s service=%s entry=%s "
+        "hop_added=%d hop_missing=%d hop_failing=%d new=%d",
+        drift.system,
+        drift.entry.service,
+        drift.entry.operation,
+        rules[PathDriftRule.HOP_ADDED],
+        rules[PathDriftRule.HOP_MISSING],
+        rules[PathDriftRule.HOP_FAILING],
+        sum(firing.new for firing in drift.firings),
+    )
+
+
+def build_container(
+    config_path: Path | None = None, clock: Callable[[], datetime] | None = None
+) -> Container:
+    """`clock` is the body's clock for flows, the current UTC time unless a test injects one."""
     config_path = config_path or DEFAULT_CONFIG
     config = load_fire_config(config_path)
 
@@ -91,7 +114,9 @@ def build_container(config_path: Path | None = None) -> Container:
         notifier=ConsoleNotifier(),
     )
     fingerprinter = Sha256ShapeFingerprinter()
-    catalog = MemoryObservationCatalog({name: system.drift for name, system in systems.items()})
+    drift_policies = {name: system.drift for name, system in systems.items()}
+    path_policies = {name: system.paths for name, system in systems.items()}
+    catalog = MemoryObservationCatalog(drift_policies, path_policies=path_policies, clock=clock)
     sources = {name: system.source_ids() for name, system in systems.items()}
     discoveries = {name: discover(system, parsers) for name, system in systems.items()}
     scopes = {
