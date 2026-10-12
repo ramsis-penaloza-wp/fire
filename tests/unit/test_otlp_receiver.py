@@ -8,7 +8,7 @@ import gzip
 import json
 import logging
 from collections.abc import AsyncIterator, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from typing import Any
 
 import httpx
@@ -18,6 +18,7 @@ from otlp_json import START_NS, attributes, event, link, request, resource_spans
 
 from fire.adapters.sources.listener import listen
 from fire.adapters.sources.otlp import OtlpReceiver, parse_traces
+from fire.core.domain.capture import CaptureEvent
 from fire.core.domain.observation import SpanKind
 from fire.core.ports.span_source import (
     RawLink,
@@ -31,16 +32,34 @@ TRACE = "4bf92f3577b34da6a3ce929d0e0e4736"
 SPAN = "00f067aa0ba902b7"
 PARENT = "53995c3f42cd8ad8"
 JSON = {"content-type": "application/json"}
+CAPTURE = CaptureEvent(
+    name="transmission.capture",
+    request_uri="omg.transmission.request_uri",
+    response_uri="omg.transmission.response_uri",
+)
+REQUEST_URI = "s3://captures/oracle/requests/wu-1/submit_20261011_120000_000001.json"
+RESPONSE_URI = "s3://captures/oracle/responses/wu-1/submit_20261011_120000_000001.json"
 
 
-def _one(document: dict[str, Any]) -> RawSpan:
-    [raw] = parse_traces(document)
+def _one(document: dict[str, Any], capture_event: CaptureEvent | None = None) -> RawSpan:
+    [raw] = parse_traces(document, capture_event)
     return raw
 
 
 def _client_span(items: dict[str, Any], **kw: Any) -> dict[str, Any]:
     return request(
         resource_spans("orders", [span(TRACE, SPAN, "POST", kind=3, items=items, **kw)])
+    )
+
+
+def _span_with(*events: dict[str, Any]) -> dict[str, Any]:
+    """One internal span holding `events`: a capture event lands on a client span's parent."""
+    return request(resource_spans("orders", [span(TRACE, SPAN, "submit", events=events)]))
+
+
+def _capture(request_uri: str = REQUEST_URI, response_uri: str = RESPONSE_URI) -> dict[str, Any]:
+    return event(
+        CAPTURE.name, {CAPTURE.request_uri: request_uri, CAPTURE.response_uri: response_uri}
     )
 
 
@@ -246,6 +265,85 @@ def test_only_the_first_response_body_event_is_read() -> None:
 
 
 @pytest.mark.unit
+def test_a_capture_event_gives_its_request_then_its_response_uri() -> None:
+    response_first = event(
+        CAPTURE.name,
+        {
+            CAPTURE.response_uri: RESPONSE_URI,
+            "omg.transmission.status_code": 201,
+            CAPTURE.request_uri: REQUEST_URI,
+        },
+    )
+    document = _span_with(response_first)
+    assert _one(document, CAPTURE).capture_uris == (REQUEST_URI, RESPONSE_URI)
+    assert _one(document).capture_uris == ()
+
+
+@pytest.mark.unit
+def test_every_capture_event_of_a_span_is_read_in_event_order() -> None:
+    second = (REQUEST_URI.replace("wu-1", "wu-2"), RESPONSE_URI.replace("wu-1", "wu-2"))
+    body = event("http.response.body", {"http.response.body": "[1]"})
+    raw = _one(_span_with(_capture(), body, _capture(*second)), CAPTURE)
+    assert raw.capture_uris == (REQUEST_URI, RESPONSE_URI, *second)
+    assert raw.response_body == "[1]"
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "bad",
+    [None, "", 201, True, 1.5, [REQUEST_URI], {"uri": REQUEST_URI}],
+    ids=["missing", "empty", "integer", "boolean", "double", "array", "map"],
+)
+def test_a_uri_that_is_missing_or_no_non_empty_string_reads_as_absent(bad: Any) -> None:
+    def item(key: str) -> dict[str, Any]:
+        return {} if bad is None else {key: bad}
+
+    no_request = event(CAPTURE.name, item(CAPTURE.request_uri) | {CAPTURE.response_uri: "r"})
+    no_response = event(CAPTURE.name, {CAPTURE.request_uri: "q"} | item(CAPTURE.response_uri))
+    neither = event(CAPTURE.name, item(CAPTURE.request_uri) | item(CAPTURE.response_uri))
+    raw = _one(_span_with(no_request, no_response, neither), CAPTURE)
+    assert raw.capture_uris == ("r", "q")
+
+
+@pytest.mark.unit
+def test_events_of_other_names_give_no_capture_uris() -> None:
+    uris = {CAPTURE.request_uri: REQUEST_URI, CAPTURE.response_uri: RESPONSE_URI}
+    events = [
+        event("transmission.captured", uris),
+        event("exception", uris),
+        event("http.response.body", uris | {"http.response.body": "[1]"}),
+        {"attributes": attributes(uris)},
+        {"name": [CAPTURE.name], "attributes": attributes(uris)},
+    ]
+    raw = _one(_span_with(*events), CAPTURE)
+    assert raw.capture_uris == ()
+    assert raw.response_body == "[1]"
+
+
+@pytest.mark.unit
+def test_only_the_uris_of_a_capture_event_are_read_and_repr_shows_none(canary: Canary) -> None:
+    request_uri = f"s3://captures/oracle/requests/{canary.token()}/submit.json"
+    response_uri = f"s3://captures/oracle/responses/{canary.token()}/submit.json"
+    planted = {
+        "omg.transmission.status_code": canary.number(),
+        "omg.environment": canary.token(),
+        "service.name": canary.token(),
+        CAPTURE.request_uri: request_uri,
+        CAPTURE.response_uri: response_uri,
+    }
+    events = [
+        event(CAPTURE.name, planted),
+        event(canary.token(), {CAPTURE.request_uri: canary.string(), "x": canary.token()}),
+    ]
+    raw = _one(_span_with(*events), CAPTURE)
+
+    assert raw.capture_uris == (request_uri, response_uri)
+    assert canary.leaks(repr(raw)) == []
+    others = [repr(getattr(raw, item.name)) for item in fields(raw) if item.name != "capture_uris"]
+    assert canary.leaks("".join(others) + repr(vars(raw.naming))) == []
+
+
+@pytest.mark.unit
 @pytest.mark.parametrize("document", [{}, {"resourceSpans": []}, {"resourceSpans": None}])
 def test_an_empty_request_has_no_spans(document: dict[str, Any]) -> None:
     assert parse_traces(document) == []
@@ -325,7 +423,8 @@ def test_dropped_values_never_reach_a_raw_span(canary: Canary) -> None:
     resource = {"service.version": canary.token(), "host.name": canary.token()}
     raw = _one(request(resource_spans("orders", spans, resource)))
 
-    shown = repr(raw) + repr(vars(raw.naming)) + repr([raw.request_body, raw.response_body])
+    bodies = [raw.request_body, raw.response_body, raw.capture_uris]
+    shown = repr(raw) + repr(vars(raw.naming)) + repr(bodies)
     assert canary.leaks(shown) == []
 
 
@@ -389,6 +488,27 @@ async def test_spans_are_reported_and_answered_200() -> None:
     assert charset.status_code == 200
     assert [[raw.naming.span_name for raw in batch] for batch in sink.batches] == [["a", "b"]] * 2
     assert sink.notes == []
+
+
+@pytest.mark.unit
+async def test_a_receiver_with_a_capture_event_reports_capture_uris_and_logs_none(
+    canary: Canary, caplog: pytest.LogCaptureFixture, quiet_httpx: None
+) -> None:
+    caplog.set_level(logging.DEBUG)
+    uris = (
+        f"s3://captures/oracle/requests/{canary.token()}/submit.json",
+        f"s3://captures/oracle/responses/{canary.token()}/submit.json",
+    )
+    content = json.dumps(_span_with(_capture(*uris))).encode()
+    capturing, plain = Recorder(), Recorder()
+    async with _receiver(capturing, capture_event=CAPTURE) as url:
+        response = await _post(url, content)
+    async with _receiver(plain) as url:
+        await _post(url, content)
+    assert response.status_code == 200
+    assert [raw.capture_uris for raw in capturing.batches[0]] == [uris]
+    assert [raw.capture_uris for raw in plain.batches[0]] == [()]
+    assert canary.leaks(caplog.text) == []
 
 
 @pytest.mark.unit
@@ -544,10 +664,10 @@ async def test_a_failing_sink_is_500_and_logged_by_type_only(
 
 
 @pytest.mark.unit
-async def test_no_request_data_is_logged(canary: Canary, caplog: pytest.LogCaptureFixture) -> None:
+async def test_no_request_data_is_logged(
+    canary: Canary, caplog: pytest.LogCaptureFixture, quiet_httpx: None
+) -> None:
     caplog.set_level(logging.DEBUG)
-    # The test's own client logs each URL it calls; the tentacle's CLI sets httpx to WARNING.
-    caplog.set_level(logging.WARNING, logger="httpx")
     planted = request(
         resource_spans(
             "orders",

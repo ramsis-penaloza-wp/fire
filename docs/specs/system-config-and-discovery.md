@@ -79,9 +79,9 @@ is the `source` of every observation read from it. Two systems may reuse an id.
 | `kinesis` | `direction`, `envelope`, `stream_env`, `regions` |
 | `dynamodb_stream` | `direction`, `envelope`, `table_env`, `regions`, `filter` (optional) |
 | `sns_fanout` | `direction`, `envelope`, `topic_env`, `regions` |
-| `s3_capture` | `bucket_env`, `captures` |
+| `s3_capture` | `bucket_env`, `captures`, and optional `poll_s`, `settle_s`, `max_object_bytes`, `work_id_pattern` |
 | `http_proxy` | `listen_port`, `upstream_env`, and optional `listen_host`, `openapi_path`, `openapi_refresh_s`, `max_body_bytes` |
-| `otlp` | `listen_env` |
+| `otlp` | `listen_env`, and optional `capture_event` |
 
 [tentacle.md](tentacle.md#sources-in-the-system-yaml) defines each key, and
 [http-and-span-capture.md](http-and-span-capture.md) the `http_proxy` and `otlp` ones; two
@@ -187,9 +187,10 @@ of 125 in `declared_unseen`: reading Kinesis alone does not cover OMG.
 ## Follow-ups
 
 - The tentacle ([tentacle.md](tentacle.md)) reads `replay` sources and feeds observed events
-  into the catalog; since step 1.4 its `otlp` sources feed spans and outbound shapes, and since
-  step 1.6 its `http_proxy` sources feed inbound request and response shapes. The other kinds
-  follow in roadmap steps 1.7 and 1.8. Since step 2.4, each
+  into the catalog; since step 1.4 its `otlp` sources feed spans and outbound shapes, since
+  step 1.6 its `http_proxy` sources feed inbound request and response shapes, and since step
+  1.7 its `s3_capture` sources feed outbound shapes per partner action. The other kinds follow
+  in roadmap step 1.8. Since step 2.4, each
   shape drift incident runs `audit_coverage` with the system's observed event types
   ([Drift incidents](ingest-drift-and-feedback.md#drift-incidents)); the coverage endpoint is
   step 2.5.

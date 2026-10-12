@@ -195,8 +195,12 @@ and a `trace_id`. A shape that waits `settle_s` for its trace's first span, or a
 that waits `settle_s` for the work index to name a trace, counts in `unattached_shapes`, and so do
 the shapes of an orphan flow. A shape whose trace has completed counts in `late_shapes`. The
 shapes of an evicted, truncated, broken, or drifted flow attach nowhere and are not counted: the
-flow is. In OMG, the `transmission.capture` span event names the capture pair, whose S3 keys hold
-the `work_unit_id`; no source sets both ids yet (open question 2).
+flow is. The `s3_capture` source is the first to set both
+([tentacle.md](tentacle.md#kinds), step 1.7): a pair the capture index joins to the span whose
+`transmission.capture` event named it carries that span's ids and the work unit of its key. Its
+shapes attach to that span's node and give the work index its entry, so a later shape with the
+same `work_id` alone, such as a retry's capture the index missed or a domain event of step 1.8,
+attaches to the same flow.
 
 Attaching never touches the shape's stream or baseline: a shape that attaches nowhere is still in
 the catalog, and a drifted shape attaches like any other.
@@ -389,8 +393,9 @@ Step 2.3's are the rule and signal cases of `tests/unit/test_paths.py`, the path
 ## Open questions
 
 1. Fan-in: a batch span linking to several flows joins only the first. Whether to split per link.
-2. Which sources set both `work_id` and `trace_id`, so `work_id` shapes attach. OMG's event rows
-   store `writer_traceparent`; [tentacle.md](tentacle.md) and step 1.7 decide.
+2. Which sources set both `work_id` and `trace_id`, so `work_id` shapes attach. Since step 1.7
+   joined captures do; OMG's event rows also store `writer_traceparent`, which could set both on
+   `dynamodb_stream` shapes ([tentacle.md](tentacle.md#open-questions), question 2).
 3. Whether a shape drift incident waits up to `settle_s` for its shape's flow, for a process path.
 4. Rules not covered: a new edge between known nodes, a channel at a new node, and an error rate
    (`hop_failing` never fires for a node that errored once during warm-up).

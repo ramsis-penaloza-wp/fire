@@ -1,29 +1,35 @@
-"""Openers by source kind: readers for record sources, the inbound proxy, and the OTLP receiver.
-A declared kind with none of them is skipped at startup.
+"""Openers by source kind: readers for record sources, the inbound proxy, the OTLP receiver, and
+the S3 capture source. A declared kind with none of them is skipped at startup.
 """
 
 from __future__ import annotations
 
+import re
 import socket
 from collections.abc import Callable, Mapping
 from pathlib import Path
 
 import httpx
+from botocore.exceptions import BotoCoreError
 
 from fire.adapters.sources.http_proxy import HttpProxy
 from fire.adapters.sources.listener import listen
 from fire.adapters.sources.otlp import OtlpReceiver
 from fire.adapters.sources.replay import SUFFIXES, ReplayRecordSource
+from fire.adapters.sources.s3_capture import S3CaptureSource, make_s3_client
 from fire.apps.config import (
     HttpProxySourceConfig,
     OtlpSourceConfig,
     ReplaySourceConfig,
+    S3CaptureSourceConfig,
     SourceConfig,
 )
 from fire.core.ports.record_source import RecordSource, StartPosition
 
 # Opens a source from its config and the value of its `location_env`.
 type Reader = Callable[[SourceConfig, str, StartPosition], RecordSource]
+
+_BUCKET = re.compile(r"[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]")
 
 
 class SourceUnavailable(Exception):
@@ -66,7 +72,35 @@ def open_otlp_receiver(config: OtlpSourceConfig, address: str) -> OtlpReceiver:
     host = host.removeprefix("[").removesuffix("]") if host.startswith("[") else host
     if not host or not (port.isascii() and port.isdigit()) or not 0 < int(port) < 65536:
         raise SourceUnavailable(f"{config.listen_env} is not a host:port address")
-    return OtlpReceiver(source=config.id, sock=_listen(host, int(port)))
+    return OtlpReceiver(
+        source=config.id, sock=_listen(host, int(port)), capture_event=config.capture_event
+    )
+
+
+def open_s3_capture(
+    config: S3CaptureSourceConfig, bucket: str, start: StartPosition
+) -> S3CaptureSource:
+    """Checks the bucket name and builds the source; nothing calls AWS until it reads.
+
+    An AWS environment the client cannot be built from, such as an `AWS_PROFILE` that names no
+    profile, is named by exception type only: its text quotes the environment.
+    """
+    if _BUCKET.fullmatch(bucket) is None:
+        raise SourceUnavailable(f"{config.bucket_env} is not an S3 bucket name")
+    try:
+        client = make_s3_client()
+    except BotoCoreError as error:
+        raise SourceUnavailable(f"cannot build an S3 client ({type(error).__name__})") from None
+    return S3CaptureSource(
+        source=config.id,
+        bucket=bucket,
+        rules=config.captures,
+        client=client,
+        start=start,
+        poll_s=config.poll_s,
+        settle_s=config.settle_s,
+        max_object_bytes=config.max_object_bytes,
+    )
 
 
 def _listen(host: str, port: int) -> socket.socket:

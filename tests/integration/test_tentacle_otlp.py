@@ -225,10 +225,9 @@ async def test_otlp_canary(
     canary: Canary,
     caplog: pytest.LogCaptureFixture,
     capfd: pytest.CaptureFixture[str],
+    quiet_httpx: None,
 ) -> None:
     caplog.set_level(logging.DEBUG)
-    # The test's own client logs each URL it calls; the tentacle's CLI sets httpx to WARNING.
-    caplog.set_level(logging.WARNING, logger="httpx")
     order = canary.plant(json.loads(ORDER.read_text(encoding="utf-8")))
     dropped = {
         "http.request.header.cookie": f"session={canary.token()}",
@@ -394,9 +393,9 @@ async def test_recorded_spans_canary(
     canary: Canary,
     caplog: pytest.LogCaptureFixture,
     capfd: pytest.CaptureFixture[str],
+    quiet_httpx: None,
 ) -> None:
     caplog.set_level(logging.DEBUG)
-    caplog.set_level(logging.WARNING, logger="httpx")
     for document in recorded("place_order_1"):
         planted = _plant_recording(canary, copy.deepcopy(document))
         assert json.dumps(planted) != json.dumps(document)

@@ -22,6 +22,16 @@ sources:
   - id: traces                       # spans from the system's OpenTelemetry collector
     kind: otlp
     listen_env: EXAMPLE_OTLP_LISTEN  # env var holding the listen address, such as 127.0.0.1:4318
+    capture_event:                   # optional: the span event naming a capture's S3 keys
+      name: transmission.capture
+      request_uri: transmission.request_uri
+      response_uri: transmission.response_uri
+  - id: transmissions                # request and response pairs clients write to a bucket
+    kind: s3_capture
+    bucket_env: EXAMPLE_CAPTURE_BUCKET  # env var holding the bucket name
+    work_id_pattern: "[0-7][0-9A-HJKMNP-TV-Z]{25}"  # optional; other work segments give no work_id
+    captures:                        # per client: key prefix, channel label, key layout
+      - {prefix: partner-payloads/, label: partner, layout: work_unit_action}
   - id: domain-events                # the observations' `source`; unique within the system
     kind: kinesis
     direction: internal              # internal: the system's own events; inbound: external

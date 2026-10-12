@@ -161,10 +161,9 @@ async def _wait_for_jaeger(trace_id: str) -> None:
 
 
 async def test_a_place_order_flow_reaches_the_tentacle_and_jaeger(
-    traced: Traced, canary: Canary, caplog: pytest.LogCaptureFixture
+    traced: Traced, canary: Canary, caplog: pytest.LogCaptureFixture, quiet_httpx: None
 ) -> None:
     caplog.set_level(logging.DEBUG)
-    caplog.set_level(logging.WARNING, logger="httpx")
     trace_id = await _place_order(canary)
 
     def server() -> dict[str, Any] | None:

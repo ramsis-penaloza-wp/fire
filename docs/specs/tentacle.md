@@ -14,18 +14,23 @@ config spec. OMG is the example throughout; no code names it.
 [Sources in the system YAML](#sources-in-the-system-yaml), [Envelope](#envelope),
 [Privacy](#privacy), and [Canary harness](#canary-harness) are the contract of the shipped code
 (step 1.3), and so are the `replay` kind, the `otlp` kind (step 1.4,
-[OTLP receiver](http-and-span-capture.md#otlp-receiver)), and the `http_proxy` kind (step 1.6,
-[Inbound proxy](http-and-span-capture.md#inbound-proxy)). The other kinds load and validate in
-the system YAML, but their readers, described in [Kinds](#kinds), are a proposal until steps
-1.7 and 1.8.
+[OTLP receiver](http-and-span-capture.md#otlp-receiver)), the `http_proxy` kind (step 1.6,
+[Inbound proxy](http-and-span-capture.md#inbound-proxy)), and the `s3_capture` kind (step 1.7,
+with [Capture events](http-and-span-capture.md#capture-events)). The other kinds load and
+validate in the system YAML, but their readers, described in [Kinds](#kinds), are a proposal
+until step 1.8.
 
 | Module | Holds |
 |--------|-------|
-| `fire/apps/tentacle/` | `__main__.py` (the CLI), `runner.py` (startup and the run loop), `sender.py`, `counters.py`, `sources.py` (readers by kind, `open_http_proxy`, and `open_otlp_receiver`) |
+| `fire/apps/tentacle/` | `__main__.py` (the CLI), `runner.py` (startup and the run loop), `sender.py`, `counters.py`, `sources.py` (readers by kind, `open_http_proxy`, `open_otlp_receiver`, and `open_s3_capture`) |
 | `fire/core/ports/record_source.py` | `RecordSource`, `RawRecord`, `StartPosition` |
 | `fire/core/services/record_pipeline.py` | `RecordPipeline` and its reason codes |
 | `fire/core/domain/envelope.py` | `Envelope` and its path models |
 | `fire/adapters/sources/replay.py` | `ReplayRecordSource` |
+| `fire/core/domain/capture.py` | `CaptureRule`, `CaptureLayout`, `CaptureEvent`, `CaptureKey`, `read_capture_key`, `checked_action`, `object_key`, `CaptureIndex`, `SpanRef` |
+| `fire/core/ports/capture_source.py` | `CaptureSource`, `RawCapture`, `ObjectState` |
+| `fire/core/services/capture_pipeline.py` | `CapturePipeline` and its reason codes |
+| `fire/adapters/sources/s3_capture.py` | `S3CaptureSource`, `make_s3_client` |
 | `fire/apps/config.py` | `TentacleConfig` and one model per source kind |
 
 The inbound proxy's modules are listed in [Inbound proxy](http-and-span-capture.md#inbound-proxy)
@@ -45,12 +50,14 @@ python -m fire.apps.tentacle --system omg [--source <id>] [--start latest|oldest
   file, an unknown `--source`, an unset `api.token_env` or `tentacle.body_url_env`, a body URL
   that is not `http` or `https`, a named source that would be skipped, a source whose env var
   names nothing it can read (a `replay` path that is no `.json` or `.jsonl` file and no
-  directory, an `http_proxy` upstream that is not an `http` or `https` URL, or an `otlp`
-  listen address that is not `host:port`), an `http_proxy` or `otlp` source whose listen
-  address cannot be bound, and no source left to run. Messages name env vars and listen
-  addresses, never other env var values.
-- A `replay` source ends when its files are read; live sources, `http_proxy` and `otlp`
-  included, run until `SIGINT` or `SIGTERM`. `--start latest` (the default) reads what is
+  directory, an `http_proxy` upstream that is not an `http` or `https` URL, an `otlp` listen
+  address that is not `host:port`, or an `s3_capture` bucket that is not an S3 bucket name), an
+  `http_proxy` or `otlp` source whose listen address cannot be bound, an AWS environment from
+  which no S3 client can be built (`cannot build an S3 client (<type>)`, such as an
+  `AWS_PROFILE` that names no profile), and no source left to run. Messages name env vars and
+  listen addresses, never other env var values.
+- A `replay` source ends when its files are read; live sources, `s3_capture`, `http_proxy`, and
+  `otlp` included, run until `SIGINT` or `SIGTERM`. `--start latest` (the default) reads what is
   written after start; `oldest` reads what a source still retains; `replay`, `http_proxy`, and
   `otlp` ignore it.
   Positions live in memory, so a restart begins at `--start` and the body's dedupe absorbs the
@@ -97,7 +104,8 @@ codes: `read` (an `s3_capture` record is one pair, an `http_proxy` record one ex
 `otlp` record one span), `built`, `sent` (in batches answered `202`), `unsent`, `pending`,
 `rejected` and `skipped` by the reasons below, `noted` events counted apart from records (an
 `http_proxy`'s `invalid_traceparent` and `templates_refresh_failed`; an `otlp` receiver's
-`operation_unlisted`, `invalid_link`, `buffer_full`, and the requests it refused), and the
+`operation_unlisted`, `invalid_link`, `buffer_full`, `capture_indexed`, and the requests it
+refused; an `s3_capture`'s `unjoined`), and the
 body's `duplicate` and `rejected` counts by its reasons, for shapes and spans together.
 `sent + unsent + pending = built` at all times. Reasons are `reason:count` pairs sorted by
 reason, or `-`:
@@ -195,7 +203,7 @@ key's env var.
 | `kinesis` | `stream_env`, `regions` | One record's data, decoded as JSON |
 | `dynamodb_stream` | `table_env`, `regions`, `filter` (optional) | One stream record's new image, as plain JSON |
 | `sns_fanout` | `topic_env`, `regions` | One SNS notification, with `Message` decoded |
-| `s3_capture` | `bucket_env`, `captures` | One request and response pair |
+| `s3_capture` | `bucket_env`, `captures`, and the reading keys below | One request and response pair |
 | `http_proxy` | `listen_port`, `upstream_env`, and more in [Inbound proxy](http-and-span-capture.md#inbound-proxy) | One HTTP exchange the proxy forwarded |
 | `otlp` | `listen_env`, see [OTLP receiver](http-and-span-capture.md#otlp-receiver) | One span the receiver took |
 
@@ -204,8 +212,10 @@ never one named inside the record. [Migration](#migration) shows each kind in OM
 `replay` has a reader (step 1.3). `http_proxy` has an opener, `open_http_proxy` (step 1.6),
 which serves instead of reading: it reports each exchange to the runner, which shapes it with
 `ExchangePipeline` instead of `RecordPipeline`. `otlp` has one too, `open_otlp_receiver` (step
-1.4): it reports each request's spans, and the runner maps them with `SpanPipeline`. The
-tentacle skips the other kinds, as [Process](#process) says.
+1.4): it reports each request's spans, and the runner maps them with `SpanPipeline`. So has
+`s3_capture`, `open_s3_capture` (step 1.7): its source yields pairs, not records, and the runner
+shapes them with `CapturePipeline`. The tentacle skips the other kinds, as [Process](#process)
+says.
 
 **`replay`** (`ReplayRecordSource`). `path_env` holds a `.json` file (an object or a list), a
 `.jsonl` file, or a directory of them, read in name order and not recursively; other files and
@@ -243,34 +253,98 @@ Subscribing writes to the system's AWS account, so at L3 this kind waits on road
 question 10. A queue the system reads directly, such as OMG's `money_outcomes`, is not a
 source: reading it takes messages from the system.
 
-**`s3_capture`.** Reads the request and response pairs a system's clients write to a bucket.
-`bucket_env` holds the bucket name. Each `captures` entry (one or more) gives a client's key
-`prefix` (unique within the source), the `label` that starts its channel names
+**`s3_capture`** (`S3CaptureSource`, then `CapturePipeline`). Reads the request and response
+pairs a system's clients write to a bucket. `bucket_env` holds the bucket name. Each `captures`
+entry (one or more, a `CaptureRule`) gives a client's key `prefix` (ending in `/`, not starting
+with one, unique, and inside no other prefix), the `label` that starts its channel names
 (`^[a-z0-9][a-z0-9_-]*$`), and its `layout`.
 
-- Every 5 s the source lists each prefix's `responses/` and reads each new response once it is
-  10 s old, so both halves have landed, with the request of the same stem. An object matching
-  no layout is `no_layout`, never guessed; `index/` markers are `skipped: index_marker`.
-- A pair gives `http:outbound:{label}:{action}:request` and
-  `http:outbound:{label}:{action}:response:{status_class}`. `work_id` is the key's work unit and
-  `occurred_at` its timestamp. The pair id `{work_id}:{action}:{ts}` replaces the envelope and
-  is what step 4 samples; `observation_id` is `{pair id}:{part}`.
-- With step 1.7, the OTLP receiver indexes capture object keys to `(trace_id, span_id)`
-  ([Capture events](http-and-span-capture.md#capture-events)). When a pair's key is in that
-  index, both shapes carry those ids; when it is not (no `otlp` source, or the span has not
-  arrived), they carry neither and join by `work_id`. The keys never leave the tentacle.
-- Only `body` is generalized; `method`, `url`, `headers`, `error_type`, and `error` are never
-  read past decoding. `status_code: null` gives status class `none` and an empty shape.
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `poll_s` | `5` | Seconds between listings |
+| `settle_s` | `10` | A response is read once it is this old, so both halves have landed |
+| `max_object_bytes` | `1048576` | A larger object is not read |
+| `work_id_pattern` | none | A regular expression; a work segment it does not match in full gives no `work_id`. Unset, every segment does |
+
+Reading (`S3CaptureSource`, `fire/adapters/sources/s3_capture.py`):
+
+- Every `poll_s` the source lists each prefix's `responses/`, in config order, and reads each
+  response it has not read once its `LastModified` is `settle_s` old, with the request of the
+  same name under `requests/`. The keys it read are remembered in memory, pruned to those the
+  listing still shows. `--start latest` reads responses written at or after the start, floored
+  to the second; `oldest` reads every response the bucket still holds. A folder marker (a name
+  that is empty or ends in `/`) is no pair. `index/` markers sit beside `requests/` and
+  `responses/`, so the listing never sees them.
+- A response listed over `max_object_bytes` is not fetched, and a half whose fetch reports more
+  is closed unread (`too_large`). An object that is not UTF-8 JSON holding an object is
+  `undecodable`; a request that is absent (`NoSuchKey`) is `missing`. Only the object metadata
+  `action` is kept, the response's before the request's.
+- A failing listing ends that prefix's pass; a failing fetch leaves that pair for the next pass
+  and the listing goes on. Either is logged as `capture read failed: source=<id> error=<type>`,
+  `ClientError:<code>` for an AWS error response whose code is a name
+  (`ClientError:NoSuchBucket`), once per distinct error until a pass has none. AWS errors never
+  stop the source. The `boto3`, `botocore`, and `urllib3` loggers are held at `INFO`: their
+  `DEBUG` lines carry keys and bodies.
+- `make_s3_client` builds the client from the standard AWS environment, with path-style
+  addressing when `AWS_ENDPOINT_URL_S3` or `AWS_ENDPOINT_URL` is set, as for LocalStack.
+
+Shaping (`CapturePipeline`, `fire/core/services/capture_pipeline.py`). The checks on the pair
+come first, in order; a failing one builds nothing:
+
+| Pair | Result |
+|------|--------|
+| The response name has no form of the rule's layout | `rejected: no_layout` |
+| No action: the key's for `work_unit_action`, else the metadata `action` | `rejected: missing_action` |
+| The action is no name: `^[A-Za-z0-9][A-Za-z0-9._-]*$`, at most 64 characters, not a UUID, and no token between `.`, `_`, and `-` matches an [id rule](http-and-span-capture.md#id-rules) | `rejected: bad_action` |
+| The pair id is sampled out ([Record pipeline](#record-pipeline), step 4) | `skipped: sampled_out` |
+| The pair id is among the source's last 100 000 | `skipped: local_duplicate` |
+
+Then each part, the request first; the first matching row decides:
+
+| Part | Result |
+|------|--------|
+| Its object is missing, undecodable, or too large | `skipped: object_missing`, `object_undecodable`, or `object_too_large` |
+| A response whose `status_code` is null or absent | Status class `none` and an empty shape; its `body` is not read |
+| A response whose `status_code` is not an integer from 200 to 599 | `skipped: status_unclassified` |
+| `body` absent or null | `skipped: no_body` |
+| `body` a string that does not parse as JSON | `skipped: body_not_json` |
+| `body`, or the JSON in a string `body`, not an object or array | `skipped: body_not_container` |
+| Generalizing, fingerprinting, or building the observation fails | `skipped: shaping_failed` |
+| An object or array | Generalized by `FlatStarShapeGeneralizer`, fingerprinted, sent |
+
+| `ShapeObservation` field | Value |
+|--------------------------|-------|
+| `channel` | `http:outbound:{label}:{action}:request` and `http:outbound:{label}:{action}:response:{status_class}` |
+| `observation_id` | `{pair id}:request` and `{pair id}:response`; the pair id is `{label}:{work_id or -}:{action}:{ts}` |
+| `occurred_at` | The key's timestamp, for both parts |
+| `work_id` | The key's work segment, when `work_id_pattern` allows it |
+| `trace_id`, `span_id` | The span the capture index names for the response key, else for the request key |
+| `region`, `correlation_id` | `null` |
+
+- The OTLP receiver indexes the keys its capture events name to their span's ids
+  ([Capture events](http-and-span-capture.md#capture-events)); one `CaptureIndex` serves every
+  source of the tentacle. A pair whose keys are in it carries those ids, so its shapes attach
+  to that span's node and give the work index of [flows-and-paths.md](flows-and-paths.md#shapes-on-flows)
+  its entry. A pair whose keys are not (no `otlp` source with `capture_event`, or the span has
+  not arrived `settle_s` after the response landed) carries neither, joins by `work_id`, and is
+  `noted: unjoined`. The keys never leave the tentacle.
+- Only `status_code` and `body` are read; `method`, `url`, `headers`, `error_type`, and `error`
+  are never read past decoding, and no metadata but `action`. Nothing is taken from an
+  `{order_id}` segment: it is a value.
 
 | `layout` | Key under the prefix | Action from | OMG clients |
 |----------|----------------------|-------------|-------------|
-| `work_unit_action` | `{requests,responses}/{work_unit_id}/{action}_{ts}.json` | The key | Narvar, Insurance, Monocle; Notification, whose channel is the action |
+| `work_unit_action` | `{requests,responses}/{work_unit_id}/{action}_{ts}.json` | The key | Narvar, Insurance, Monocle; Notification, whose channel is in the action's place |
 | `work_unit_order_action` | `…/{work_unit_id}/{order_id}_{action}_{ts}.json` | Object metadata `action` | Oracle OM |
-| `work_unit_order` | `…/{work_unit_id}/{order_id}_{ts}.json` | Object metadata `action`; Order Services writes none | Helios, Order Services |
+| `work_unit_order` | `…/{work_unit_id}/{order_id}_{ts}.json` | Object metadata `action` | Helios; Order Services writes none, so its pairs are `missing_action` (open question 3) |
 
-`{ts}` is `%Y%m%d_%H%M%S_%f` in UTC (`adapters/src/clients/transmission_capture.py`). Nothing
-is taken from an `{order_id}` segment: it is a value. Oracle files `unattributed` and Helios an
-execution id when no work unit is bound; step 1.7 maps those to no `work_id`.
+`{ts}` is `%Y%m%d_%H%M%S_%f` in UTC (`adapters/src/clients/transmission_capture.py`). A request
+holds `method`, `url`, `headers`, and `body`; a response `status_code`, `headers`, and `body`;
+Helios adds `api_version` to both. When no response came, OMG's middleware writes
+`status_code: null` with `error_type` and `error`, and Helios leaves `status_code` out, which is
+why both give `none`. Oracle files `unattributed` when no work unit is bound, which OMG's
+`work_id_pattern`, the ULID form, turns into no `work_id`. Helios files an execution id, also a
+ULID, when it places from the API: it becomes a `work_id` that only its own capture carries.
 
 ## Privacy
 
@@ -280,12 +354,15 @@ counts. Never values, URLs whose path or query carries values, headers, or bodie
 
 - The sender posts the models of [observations.md](observations.md) and nothing else. Ids and
   names come only from declared envelope paths, layout segments, or config.
-- Logs hold source ids, counters, reason codes, channel keys, and exception type names. Never
-  a record, a payload, an S3 key, a partition or sort key, a message, or the text of an
-  exception raised while a record is in hand: a Pydantic `ValidationError` quotes its input.
+- Logs hold source ids, counters, reason codes, channel keys, exception type names, and AWS
+  error codes. Never a record, a payload, an S3 key or bucket name, object metadata, a
+  partition or sort key, a message, or the text of an exception raised while a record is in
+  hand: a Pydantic `ValidationError` quotes its input.
 - Shape paths are payload keys, so a map keyed by data puts values into paths
   ([observations.md](observations.md#open-questions), question 1). The canary harness plants
-  values, not keys, and does not catch this.
+  values, not keys, and does not catch this. OMG's Insurance `calculate_contracted_loss`
+  response is one: `contracted_loss_by_item` and `admin_fee_by_item` are keyed by sales order
+  item ids, so its L1 fixture holds both maps empty.
 
 ### Canary harness
 
@@ -315,7 +392,11 @@ source kind with a reader passes it; `tests/integration/test_tentacle_canary.py`
   `tests/integration/test_tentacle_otlp.py` posts OTLP JSON with canaries in dropped
   attributes, URL paths and queries, headers, both bodies, `status.message`, events, links,
   resource attributes, and a rejected span, and again in every scrubbed value of OMG's L1
-  recordings.
+  recordings. Nor has `s3_capture`, whose source is not in `READERS`:
+  `tests/integration/test_tentacle_capture.py` writes pairs to a mocked bucket with canaries in
+  every value of both documents (`method`, `url`, `headers`, `error`, every body leaf), in the
+  order id segment of the keys, in metadata other than `action`, and in the capture event's
+  other attributes, with rejected and duplicate pairs, and checks the same places.
 
 ## Migration
 
@@ -332,7 +413,11 @@ Elsewhere this document uses OMG's logical names (`domain_events`, `carrier_even
 
 ```yaml
 sources:
-  - {id: omg-traces, kind: otlp, listen_env: OMG_OTLP_LISTEN}
+  - id: omg-traces
+    kind: otlp
+    listen_env: OMG_OTLP_LISTEN
+    capture_event: {name: transmission.capture, request_uri: omg.transmission.request_uri,
+                    response_uri: omg.transmission.response_uri}
   - {id: omg-api, kind: http_proxy, listen_port: 8120, upstream_env: OMG_API_UPSTREAM}
   - {id: omg-validation, kind: http_proxy, listen_port: 8130,
      upstream_env: OMG_VALIDATION_UPSTREAM}
@@ -368,6 +453,7 @@ sources:
   - id: transmissions
     kind: s3_capture
     bucket_env: OMG_TRANSMISSION_BUCKET
+    work_id_pattern: "[0-7][0-9A-HJKMNP-TV-Z]{25}"   # a ULID; Oracle's `unattributed` is none
     captures:
       - {prefix: narvar-payloads/, label: narvar, layout: work_unit_action}
       - {prefix: insurance-payloads/, label: insurance, layout: work_unit_action}
@@ -388,6 +474,9 @@ sources:
 `occurred_at: Message.published_at`. No OMG source maps `correlation_id` (open question 1).
 Step 1.6 added the two `http_proxy` sources and `OMG_API_UPSTREAM` and
 `OMG_VALIDATION_UPSTREAM` to `.env.example`; step 1.4 added `omg-traces` and `OMG_OTLP_LISTEN`.
+Step 1.7 added `capture_event` to `omg-traces`, `work_id_pattern` to `transmissions`, and
+`CaptureRule` and `CaptureLayout` moved from `fire/apps/config.py` to `fire/core/domain/capture.py`,
+with a prefix that must end in `/` and lie inside no other prefix.
 
 ## Tests per step
 
@@ -416,9 +505,30 @@ OMG dev on AWS, read only, by hand. Each step runs the canary harness for its ki
   [HTTP and span capture](http-and-span-capture.md#tests); the runner's are the proxy cases of
   `test_tentacle_runner.py` (exchanges counted and sent, `buffer_full`, a failing proxy, an
   upstream that is no URL, a busy port) and of `test_system_config.py`.
-- **1.7.** L0: each layout's keys, with no order id in a channel name, `work_id`, or
-  `observation_id`; pairing; `status_code: null`; `no_layout`. L1: capture files per layout.
-  L2: `make test-oracle-publisher` and `make test-fulfillment-processor` give Oracle channels.
+- **1.7.** L0: `tests/unit/test_capture.py` (each layout's keys and every form that is none, with
+  no order id in a `CaptureKey`; actions and the ids and values that are not; `object_key`; the
+  index's ttl, refresh, and bound; the rule and event models), `test_capture_pipeline.py` (each
+  check and row in order; the channel keys per layout; the metadata action; `work_id_pattern`;
+  the join by response key, by request key, expired, and with no index; `status_code` null and
+  absent give `none` with the body unread; only `body` and `status_code` are read; the canary),
+  `test_s3_capture_source.py` (`moto`: listing order, settle, `latest` and `oldest`, folder
+  markers, missing, undecodable, and too-large halves, metadata precedence, a failing listing
+  logged once, a failing fetch retried without blocking the prefix, path-style addressing, no
+  key or value in a log or `repr`), the capture event cases of `test_otlp_receiver.py`, the
+  capture cases of `test_tentacle_runner.py` (skipped without a bucket, a bucket that is no
+  name, one shared index, capture URIs indexed only from spans sent, counts, backpressure, a
+  failing source), and of `test_system_config.py`. Integration:
+  `tests/integration/test_tentacle_capture.py` (`moto` and the body: a capture event joins its
+  pair to its span; a pair no event names joins by `work_id`; `none`; reasons counted and a
+  second run only duplicates; the canary). L1: `test_place_order_captures.py`: each fixture of
+  `tests/fixtures/omg/captures/` gives its channels; the recorded place-order flow with its
+  capture event pointed at a Helios pair attaches that pair to `sf-publisher.business_logic`,
+  and a redelivery of the same work unit and a `WorkUnit` with its id, which carry `work_id`
+  alone, reach the same flow through the work index; without `capture_event` all five shapes
+  count as unattached. L2: `test_tentacle_capture_omg.py`: a fresh order's Helios capture
+  carries the ids of its `sf-publisher.business_logic` span and shows on that node in `/paths`,
+  with no canary, S3 key, or order id in what the tentacle sends or logs. No local target writes
+  Oracle captures without writing to Oracle's dev environment, so Helios is the L2 partner.
 - **1.8.** L0: decoding per kind, `REMOVE`, `filter`, one event from two regions as one
   observation and from two sources as two. L1: records per kind from localstack. L2 with
   `KINESIS_ENABLED=true`: `make test-order` and the processor targets fill `order-domain-events`
@@ -433,13 +543,19 @@ OMG dev on AWS, read only, by hand. Each step runs the canary harness for its ki
 2. OMG's event items carry `writer_traceparent`. An optional `envelope.traceparent` would set
    `trace_id` and `span_id` on `dynamodb_stream` shapes and give the work index its `work_id`
    to trace link without waiting for a capture.
-3. Order Services captures carry no action in the key or metadata. Name it from the request's
-   method and path (step 1.5), or ask OMG for `action` metadata?
+3. Order Services captures carry no action in the key or metadata, so they are
+   `missing_action`. Name it from the request's method and path (step 1.5), or ask OMG for
+   `action` metadata?
 4. Positions live in memory, so records written while the tentacle is down are missed unless
    `--start oldest` covers them. Persist checkpoints, or wait for the durable buffer?
-5. Listing S3 every 5 s grows with the bucket; S3 event notifications to a FIRE-owned queue
-   would need a bucket change in OMG's account.
+5. Listing S3 every 5 s grows with the bucket, and so does the set of keys read, held in
+   memory; S3 event notifications to a FIRE-owned queue would need a bucket change in OMG's
+   account.
 6. A source whose records lack an event type (OMG accepts financials bodies without one) needs
    a constant channel name: a literal envelope form, or reject such records?
 7. The regions of `rx_updates`, `carrier_events`, and `financials_events`, and the stream view
    type of `omg-dev-order_domain_events`.
+8. A captured request's `headers` hold the `traceparent` the client sent, whose parent id is the
+   `CLIENT` span's (seen in OMG's local Helios captures). Reading that one header would join a
+   pair to its `CLIENT` span, not the parent the capture event lands on, and without an `otlp`
+   source. Read it, or keep headers unread?

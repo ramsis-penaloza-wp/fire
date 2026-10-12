@@ -19,11 +19,13 @@ from fire.apps.config import (
     load_system_config,
     load_system_configs,
 )
+from fire.core.domain.capture import CaptureEvent
 from fire.core.domain.observation import ChannelDirection
 
 SYSTEMS = Path(__file__).resolve().parents[2] / "config" / "systems"
 TEMPLATE = SYSTEMS / "_template.yml"
 ENVELOPE = {"event_id": "id", "event_type": "type", "occurred_at": "at", "payload": "data"}
+ULID = "[0-7][0-9A-HJKMNP-TV-Z]{25}"
 
 
 def _minimal(**overrides: Any) -> dict[str, Any]:
@@ -47,9 +49,18 @@ def test_template_is_a_valid_system_config() -> None:
     config = SystemConfig.model_validate(yaml.safe_load(TEMPLATE.read_text()))
     assert config.notify.slack.channel_id == "C0123456789"
     assert config.discovery.manifest is not None
-    traces, source = config.sources
+    traces, captures, source = config.sources
     assert isinstance(traces, OtlpSourceConfig)
     assert traces.location_env == "EXAMPLE_OTLP_LISTEN"
+    assert traces.capture_event == CaptureEvent(
+        name="transmission.capture",
+        request_uri="transmission.request_uri",
+        response_uri="transmission.response_uri",
+    )
+    assert isinstance(captures, S3CaptureSourceConfig)
+    assert captures.location_env == "EXAMPLE_CAPTURE_BUCKET"
+    assert captures.work_id_pattern == ULID
+    assert [capture.label for capture in captures.captures] == ["partner"]
     assert source.id == "domain-events"
     assert source.kind == "kinesis"
     assert isinstance(source, EventSourceConfig)
@@ -412,6 +423,88 @@ def test_s3_capture_layouts() -> None:
 
 
 @pytest.mark.unit
+def test_s3_capture_defaults() -> None:
+    [source] = SystemConfig.model_validate(_minimal(sources=[_source("s3_capture")])).sources
+    assert isinstance(source, S3CaptureSourceConfig)
+    assert (source.poll_s, source.settle_s) == (5, 10)
+    assert source.max_object_bytes == 1_048_576
+    assert source.work_id_pattern is None
+
+
+@pytest.mark.unit
+def test_s3_capture_reading_keys_load() -> None:
+    reading = {"poll_s": 0.05, "settle_s": 0, "max_object_bytes": 1, "work_id_pattern": ULID}
+    [source] = SystemConfig.model_validate(
+        _minimal(sources=[_source("s3_capture", **reading)])
+    ).sources
+    assert isinstance(source, S3CaptureSourceConfig)
+    assert source.model_dump(include=set(reading)) == reading
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [
+        ("poll_s", 0),
+        ("settle_s", -1),
+        ("max_object_bytes", 0),
+        ("work_id_pattern", "[0-7"),
+        ("work_id_pattern", ""),
+    ],
+    ids=["poll-zero", "settle-negative", "max-bytes-zero", "pattern-no-regex", "pattern-empty"],
+)
+def test_s3_capture_checks_its_reading_keys(key: str, value: Any) -> None:
+    locs = _source_error_locs(_source("s3_capture", **{key: value}))
+    assert locs == [("sources", 0, "s3_capture", key)]
+
+
+@pytest.mark.unit
+def test_s3_capture_names_a_pattern_that_is_no_regular_expression() -> None:
+    with pytest.raises(ValidationError, match="work_id_pattern is not a regular expression"):
+        SystemConfig.model_validate(
+            _minimal(sources=[_source("s3_capture", work_id_pattern="(unclosed")])
+        )
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "prefix",
+    ["partner-payloads", "/partner-payloads/", "partner payloads/", "/"],
+    ids=["no-trailing-slash", "leading-slash", "space", "slash-only"],
+)
+def test_s3_capture_prefix_ends_with_a_slash_and_starts_with_none(prefix: str) -> None:
+    locs = _source_error_locs(_source("s3_capture", captures=[{**CAPTURE, "prefix": prefix}]))
+    assert locs == [("sources", 0, "s3_capture", "captures", 0, "prefix")]
+
+
+@pytest.mark.unit
+def test_s3_capture_prefixes_lie_inside_no_other_prefix() -> None:
+    captures = [
+        {**CAPTURE, "prefix": "a/b/", "label": "inner"},
+        {**CAPTURE, "prefix": "a/", "label": "outer"},
+        {**CAPTURE, "prefix": "ab/", "label": "beside"},
+    ]
+    with pytest.raises(ValidationError) as caught:
+        SystemConfig.model_validate(_minimal(sources=[_source("s3_capture", captures=captures)]))
+    assert [(error["loc"], error["msg"]) for error in caught.value.errors()] == [
+        (
+            ("sources", 0, "s3_capture"),
+            "Value error, capture prefixes inside another prefix: a/b/",
+        )
+    ]
+
+
+@pytest.mark.unit
+def test_omg_reads_its_transmissions_with_the_ulid_work_id_pattern() -> None:
+    sources = {source.id: source for source in load_system_configs(SYSTEMS)["omg"].sources}
+    transmissions = sources["transmissions"]
+    assert isinstance(transmissions, S3CaptureSourceConfig)
+    assert transmissions.location_env == "OMG_TRANSMISSION_BUCKET"
+    assert transmissions.work_id_pattern == ULID
+    assert all(capture.prefix.endswith("/") for capture in transmissions.captures)
+
+
+@pytest.mark.unit
 def test_http_proxy_defaults() -> None:
     [source] = SystemConfig.model_validate(_minimal(sources=[_source("http_proxy")])).sources
     assert isinstance(source, HttpProxySourceConfig)
@@ -483,12 +576,62 @@ def test_omg_proxies_sit_in_front_of_the_api_and_the_validation_engine() -> None
         ("listen_host", "0.0.0.0"),
         ("direction", "inbound"),
         ("envelope", ENVELOPE),
-        ("capture_event", {"name": "transmission.capture"}),
     ],
 )
 def test_otlp_checks_its_keys(key: str, value: Any) -> None:
     locs = _source_error_locs(_source("otlp", **{key: value}))
     assert locs == [("sources", 0, "otlp", key)]
+
+
+CAPTURE_EVENT = {
+    "name": "transmission.capture",
+    "request_uri": "omg.transmission.request_uri",
+    "response_uri": "omg.transmission.response_uri",
+}
+
+
+@pytest.mark.unit
+def test_otlp_capture_event_is_optional() -> None:
+    [source] = SystemConfig.model_validate(_minimal(sources=[_source("otlp")])).sources
+    assert isinstance(source, OtlpSourceConfig)
+    assert source.capture_event is None
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(("ttl", "expected"), [({}, 900), ({"ttl_s": 60.5}, 60.5)])
+def test_otlp_capture_event_loads_with_its_ttl(ttl: dict[str, Any], expected: float) -> None:
+    [source] = SystemConfig.model_validate(
+        _minimal(sources=[_source("otlp", capture_event={**CAPTURE_EVENT, **ttl})])
+    ).sources
+    assert isinstance(source, OtlpSourceConfig)
+    assert source.capture_event == CaptureEvent(**CAPTURE_EVENT, ttl_s=expected)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("capture_event", "keys"),
+    [
+        ({"request_uri": "a", "response_uri": "b"}, [("name",)]),
+        ({**CAPTURE_EVENT, "name": ""}, [("name",)]),
+        ({"name": "transmission.capture"}, [("request_uri",), ("response_uri",)]),
+        ({**CAPTURE_EVENT, "response_uri": CAPTURE_EVENT["request_uri"]}, [()]),
+        ({**CAPTURE_EVENT, "ttl_s": 0}, [("ttl_s",)]),
+        ({**CAPTURE_EVENT, "status_code": "omg.transmission.status_code"}, [("status_code",)]),
+    ],
+    ids=["missing-name", "empty-name", "missing-uris", "same-uris", "ttl-zero", "unknown-key"],
+)
+def test_otlp_capture_event_errors_name_their_location(
+    capture_event: dict[str, Any], keys: list[tuple[str, ...]]
+) -> None:
+    locs = _source_error_locs(_source("otlp", capture_event=capture_event))
+    assert locs == [("sources", 0, "otlp", "capture_event", *key) for key in keys]
+
+
+@pytest.mark.unit
+def test_otlp_capture_event_needs_two_different_attributes() -> None:
+    same = {**CAPTURE_EVENT, "response_uri": CAPTURE_EVENT["request_uri"]}
+    with pytest.raises(ValidationError, match="request_uri and response_uri must be different"):
+        SystemConfig.model_validate(_minimal(sources=[_source("otlp", capture_event=same)]))
 
 
 @pytest.mark.unit
@@ -504,6 +647,7 @@ def test_omg_receives_its_collectors_spans() -> None:
     traces = sources["omg-traces"]
     assert isinstance(traces, OtlpSourceConfig)
     assert traces.location_env == "OMG_OTLP_LISTEN"
+    assert traces.capture_event == CaptureEvent(**CAPTURE_EVENT)
 
 
 @pytest.mark.unit

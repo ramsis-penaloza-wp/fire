@@ -7,10 +7,11 @@ tentacle run on the host. Nothing in the OMG repository changes: FIRE adds one c
 passed with an extra `-f`, and its own collector config.
 
 **Status: partly planned.** The body runs, with its flows and paths (steps 1.9 and 2.3), and so
-does the tentacle with its `replay` source (step 1.3), its OTLP receiver (step 1.4), and its
-inbound proxies (step 1.6), so section a, the L2 tests of section c, the `/paths` check of
-section d, and the inbound part of the drift demo (section e) run today. Roadmap steps 1.7, 1.8,
-1.10, and 2.6 add the other files and commands below.
+does the tentacle with its `replay` source (step 1.3), its OTLP receiver (step 1.4), its
+inbound proxies (step 1.6), and its transmission captures (step 1.7), so section a, the L2 tests
+of section c, the `/streams` and `/paths` checks of section d, and the inbound part of the drift
+demo (section e) run today. Roadmap steps 1.8, 1.10, and 2.6 add the other files and commands
+below.
 
 Related: [ingest spec](../../docs/specs/ingest-drift-and-feedback.md),
 [tentacle](../../docs/specs/tentacle.md), [HTTP and span capture](../../docs/specs/http-and-span-capture.md),
@@ -33,6 +34,9 @@ OMG, per its `README.md`, `AGENTS.md`, and `.docs/runbooks/local-setup.md`:
 - ECR access to account `844647875270` for the private `wp-terraform` image. OMG runs
   `make aws/ecr/login` before every `make docker/up/*`.
 - `uv sync --all-packages --dev` in `$OMG_REPO`.
+- The company VPN (Tailscale) connected whenever an order is placed: OMG derives tax codes at
+  payment-services staging, and without the VPN every place order answers
+  `502 Tax code derivation failed at payment-services.`
 
 FIRE: Python 3.13+, uv, `jq`, `curl`, and `make install`. Copy `.env.example` to `.env` and set
 `FIRE_API_TOKEN`. The curl checks below read it from the shell: `set -a; . "$FIRE_REPO/.env"; set +a`.
@@ -44,6 +48,7 @@ FIRE: Python 3.13+, uv, `jq`, `curl`, and `make install`. Copy `.env.example` to
 | `compose.fire.yml` | 1.4 | Override that mounts FIRE's collector config into OMG's `otel-collector` |
 | `otel-collector-config.yml` | 1.4 | OMG's collector config plus one exporter to the tentacle |
 | `record_otlp.py` | 1.4 | Records what the collector exports to FIRE, scrubbed, as L1 fixtures (section c) |
+| `record_captures.py` | 1.7 | Records transmission captures from LocalStack's bucket, scrubbed, as L1 fixtures (section c) |
 | `corpora/` | 2.6 | Drift corpora: `events/` (WorkUnits), `outbound/` (Oracle captures), `path/` (place-order OTLP traces) |
 
 - `compose.fire.yml` mounts FIRE's collector config and adds `extra_hosts`. Compose merges
@@ -122,13 +127,22 @@ collector is enough). `omg-api` listens on `:8120` in front of `:8020`, and `omg
 on `:8130` in front of `:8030`. Each fetches its upstream's `/openapi.json` and logs
 `templates loaded: source=omg-api templates=<n> dropped=0`. The OTLP receiver (step 1.4),
 `omg-traces`, listens on `OMG_OTLP_LISTEN` for the collector of section a and logs
-`spans received: source=omg-traces` with its first batch; its counters line counts spans. The
-other sources are skipped:
+`spans received: source=omg-traces` with its first batch; its counters line counts spans, and
+`noted=capture_indexed:<n>` the S3 keys its `transmission.capture` events named. The
+transmission captures (step 1.7), `transmissions`, need `OMG_TRANSMISSION_BUCKET` and
+LocalStack's AWS environment (the "every source at once" block below). The source lists each
+client prefix's `responses/` every 5 s and reads a pair 10 s after its response lands; its
+counters line counts pairs, with `noted=unjoined:<n>` for pairs no capture event named (the
+receiver is not running, or the span had not arrived), and an AWS error is logged once as
+`capture read failed: source=transmissions error=<type>`. The other sources are skipped:
 
 ```bash
 cd "$FIRE_REPO"
 OMG_OTLP_LISTEN=127.0.0.1:4318 \
 OMG_API_UPSTREAM=http://localhost:8020 OMG_VALIDATION_UPSTREAM=http://localhost:8030 \
+OMG_TRANSMISSION_BUCKET=order-management-gateway-transmission-data-dev \
+AWS_ENDPOINT_URL=http://localhost:4566 AWS_REGION=us-east-1 \
+AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test \
   uv run python -m fire.apps.tentacle --system omg 2>&1 | tee /tmp/fire-tentacle.log
 ```
 
@@ -188,6 +202,18 @@ trace, whose root span links to that `SERVER` span: the SNS `Publish` and the pr
 feeds. Staging refuses sf-publisher's Helios call locally, so SQS redelivers that work unit a
 few times, and its retries arrive with later traffic.
 
+Each Helios call writes a transmission capture pair to LocalStack's bucket, under
+`springfield-payloads/`, and adds a `transmission.capture` event naming its keys to
+`sf-publisher.business_logic`. Helios is the capturing partner of the local stack, and a fresh
+order is its target: `/streams` gains `http:outbound:helios:estimate_place:request` and
+`:response:5xx` (staging answers `500`), and the pair's shapes carry that span's ids and the work
+unit, so `/paths` shows both channels on the `sf-publisher.business_logic` node. No other local
+target gives a capture. `make test-sales-order-processor` stops at its missing order before its
+Insurance call, and `make test-fulfillment-processor` calls no capturing client. The Oracle
+publisher captures only for an order Oracle already holds (`order.item_validation_completed`
+skips a new one) or through `fulfillment.dispatch.execute.oracle`, and both write to Oracle's
+dev environment, so FIRE runs neither.
+
 | Target | Exercises |
 |--------|-----------|
 | `make list-payloads` | Lists `scripts/test_payloads/*.json` |
@@ -196,7 +222,7 @@ few times, and its retries arrive with later traffic.
 | `make test-order-custom PAYLOAD=<file>` | Same with any file in `scripts/test_payloads/` |
 | `make test-sales-order-processor` | `sales_order_processor` Lambda with the `order.charged` WorkUnit; `batchItemFailures` without a matching order |
 | `make test-fulfillment-processor` | `order-management-gateway-fulfillment-processor` with the `fulfillment.receive` WorkUnit |
-| `make test-oracle-publisher PAYLOAD=<file>` | `order-management-gateway-oracle-publisher`; `PAYLOAD` is required |
+| `make test-oracle-publisher PAYLOAD=<file>` | `order-management-gateway-oracle-publisher`; `PAYLOAD` is required, and OMG commits none it consumes |
 
 Through the proxy (step 1.6). OMG reads its token from the `x-service-token` header. Locally
 `config/dev.yml` sets `api_auth.require_auth: false`, so the header is optional; it keeps the
@@ -219,9 +245,10 @@ curl -s -H "$H" http://127.0.0.1:8000/v0/systems/omg/streams | jq '.streams[].ke
 stream per status class OMG answered. The proxy adds a `traceparent` to each request, so the
 `SERVER` span the receiver gets is a child of the span id the shapes carry.
 
-The L2 tests need section a with the collector override, and nothing else on `4318`: stop the
-tentacle first. They run their own proxy on a free port and their own receiver on
-`OMG_OTLP_LISTEN` (default `127.0.0.1:4318`), so no body or tentacle needs to run.
+The L2 tests need section a with the collector override, the VPN, and nothing else on `4318`:
+stop the tentacle first. They run their own receiver on `OMG_OTLP_LISTEN` (default
+`127.0.0.1:4318`) and, except the capture test, their own proxy on a free port, so no body or
+tentacle needs to run.
 `test_tentacle_proxy_omg.py` posts the four payloads above through the proxy and finds each
 request's `SERVER` span among the spans the receiver sent; `test_tentacle_otlp_omg.py` places
 a fresh order with canaries in its customer fields, checks the flow above arrives joined and
@@ -231,13 +258,20 @@ and that Jaeger still gets a new order's trace with nothing on the receiver's po
 no span of the order's flow has arrived for 15 seconds, prints how far apart the flow's spans
 reached the body, moves the body's clock past `settle_s`, and checks that `/paths` shows the
 flow from `POST /v1/orders/place_order` across the listener's link to sf-publisher and its
-Helios call, with the proxy's shapes on the `SERVER` node and no canary:
+Helios call, with the proxy's shapes on the `SERVER` node and no canary.
+`test_tentacle_capture_omg.py` (step 1.7) runs the receiver and the `transmissions` source on
+LocalStack's bucket (`OMG_AWS_ENDPOINT`, default `http://localhost:4566`), posts a fresh order
+with canaries straight to the API under a `traceparent` it chose, waits for sf-publisher's
+Helios capture, checks its shapes carry the ids of this order's `sf-publisher.business_logic`
+span and a work unit, and that `/paths` shows the Helios channels on that node, with no canary,
+S3 key, or order id in what the tentacle sends or logs:
 
 ```bash
 cd "$FIRE_REPO"
 OMG_REPO="$OMG_REPO" uv run pytest tests/integration/test_tentacle_otlp_omg.py \
   tests/integration/test_tentacle_proxy_omg.py tests/integration/test_paths_omg.py \
-  tests/unit/test_openapi_routes.py -m omg_local -s
+  tests/integration/test_tentacle_capture_omg.py tests/unit/test_openapi_routes.py \
+  -m omg_local -s
 ```
 
 The L1 recordings in `tests/fixtures/omg/otlp/` come from `record_otlp.py`, which listens where
@@ -253,6 +287,24 @@ cd "$FIRE_REPO"
 uv run python dev/omg/record_otlp.py tests/fixtures/omg/otlp/place_order_1
 ```
 
+The L1 capture pairs in `tests/fixtures/omg/captures/` hold one directory per client label, one
+pair per file (`prefix`, `name`, and each half's `metadata` and `document`). `helios/` comes from
+`record_captures.py`, which reads pairs from LocalStack's bucket and keeps every key and shape
+and no value: body leaves become placeholders of the same value type (it refuses a pair whose
+shape would change), header values, URLs, and error texts become `redacted`, work segments
+become fake ULIDs, and order ids `ORDER<n>`. `oracle-om/` and `insurance/` are derived by hand
+from OMG's client models, since no local target writes them. Review every file before
+committing: only names, status codes, fake ids, and key timestamps may keep a value, and body
+keys must be names, not data.
+
+```bash
+cd "$FIRE_REPO"
+AWS_ENDPOINT_URL=http://localhost:4566 AWS_REGION=us-east-1 \
+AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test \
+  uv run python dev/omg/record_captures.py tests/fixtures/omg/captures/helios \
+    --prefix springfield-payloads/ --limit 3
+```
+
 ## d. Phase 1 exit run (step 1.10)
 
 With a and b running, run these, then the proxy loop from c:
@@ -261,18 +313,16 @@ With a and b running, run these, then the proxy loop from c:
 cd "$OMG_REPO"
 make test-order && make test-order-springfield
 make test-sales-order-processor && make test-fulfillment-processor
-# make test-oracle-publisher PAYLOAD=...   (no committed WorkUnit fits yet, see the TODO below)
 H="X-FIRE-Token: $FIRE_API_TOKEN"
 curl -s -H "$H" http://127.0.0.1:8000/v0/systems/omg/streams | jq .
 curl -s -H "$H" http://127.0.0.1:8000/v0/systems/omg/paths | jq .
 ```
 
-- TODO(1.10): choose a WorkUnit for `test-oracle-publisher`. None of OMG's five committed
-  samples (`fulfillment.allocated`, `fulfillment.receive`, `order.charged`,
-  `payments.ar_refund_ack`, `payments.oracle_refund_initiated`) is an event `oracle-publisher`
-  consumes in the manifest.
+- Helios is the exit run's capturing partner: each fresh order's sf-publisher call writes a
+  pair. `make test-oracle-publisher` is left out: no committed WorkUnit is one it consumes, and
+  the ones that make it capture write to Oracle's dev environment (section c).
 - `/streams` lists `http:inbound:POST /v1/orders/place_order:request` and `:response:2xx`,
-  outbound Oracle actions, and event types.
+  `http:outbound:helios:estimate_place:request` and `:response:5xx`, and event types.
 - `/paths` has `POST /v1/orders/place_order` reaching the DynamoDB write, the listener, SNS,
   the processors, and their partner calls, once the order's flow has settled: `paths.settle_s`
   (60 in `omg.yml`) after its last span. Until then it counts under `open_flows`. An
@@ -359,7 +409,8 @@ drifted payload: after three loops the `party_id` errors alone warm `:response:4
 drifted payload's `422`, shaped differently, would notify for that channel too.
 
 L1 replays need no OMG stack. TODO(2.6): the replay commands for `corpora/outbound/` (an Oracle
-response that lost a field: one notification for that partner action) and `corpora/path/` (the
+response that lost a field, such as `tests/fixtures/omg/captures/oracle-om/001.json` with one
+removed: one notification for that partner action) and `corpora/path/` (the
 place-order trace without its Helios call: one path drift notification; the local flow makes
 no Oracle call). `tests/integration/test_place_order_paths.py` already raises that notification
 from the L1 recordings.
@@ -404,6 +455,13 @@ rm -f /tmp/fire-body.log /tmp/fire-tentacle.log /tmp/fire-canary-order.json
   proxy cannot fetch its upstream's `/openapi.json` (the log says `templates unavailable` once,
   then it retries every 5 s), and `unmatched_route:<n>` for paths OMG does not declare. A
   `502` with `x-fire-proxy: upstream-unreachable` means OMG's port is not answering.
+- **No outbound capture streams.** Without `OMG_TRANSMISSION_BUCKET` the tentacle skips
+  `transmissions` and says so. Without LocalStack's AWS environment, it logs
+  `capture read failed: source=transmissions error=<type>` once (`ClientError:<code>` for an
+  AWS error) and keeps polling; an `AWS_PROFILE` that names no profile stops it at startup with
+  `cannot build an S3 client`. `noted=unjoined:<n>` with no `capture_indexed` on `omg-traces`
+  means the receiver is not running or its source lacks `capture_event`: the pairs still arrive,
+  joined by work unit alone.
 - **401 from FIRE.** Body and caller hold different `FIRE_API_TOKEN` values; an exported
   variable wins over `.env`. A `503` means the body has no token.
 - **500 from `place_order` with `NoSuchBucket` `federation` in the API's log.** OMG's compose

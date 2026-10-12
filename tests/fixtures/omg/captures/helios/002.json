@@ -1,0 +1,102 @@
+{
+ "prefix": "springfield-payloads/",
+ "name": "0FAKE000000000000000000002/ORDER2_20261012_002047_426430.json",
+ "request": {
+  "metadata": {
+   "action": "estimate_place",
+   "api_version": "v4",
+   "direction": "outgoing",
+   "order_id": "redacted",
+   "work_unit_id": "0FAKE000000000000000000002"
+  },
+  "document": {
+   "method": "POST",
+   "url": "redacted",
+   "headers": {
+    "host": "redacted",
+    "accept": "redacted",
+    "accept-encoding": "redacted",
+    "connection": "redacted",
+    "content-type": "redacted",
+    "user-agent": "redacted",
+    "x-service-token": "redacted",
+    "cookie": "redacted",
+    "content-length": "redacted",
+    "traceparent": "redacted",
+    "x-amzn-trace-id": "redacted"
+   },
+   "body": {
+    "origin": "redacted",
+    "locale": "redacted",
+    "customer": {
+     "customer_id": "redacted",
+     "unauthenticated_checkout": false,
+     "first_name": "redacted",
+     "last_name": "redacted",
+     "email": "redacted",
+     "telephone": "redacted",
+     "wants_marketing_emails": false,
+     "sms_opt_in": false,
+     "is_fowp": false
+    },
+    "items": [
+     {
+      "item_type": "redacted",
+      "pc_product_id": "redacted",
+      "quantity": 0
+     }
+    ],
+    "payments": [
+     {
+      "id": "redacted",
+      "amount": 0,
+      "currency": "redacted",
+      "payment_type": "redacted",
+      "entry_type": "redacted",
+      "cc_id": "redacted"
+     }
+    ],
+    "addresses": [
+     {
+      "address_type": "redacted",
+      "existing_address_id": 0
+     }
+    ],
+    "public_order_id": "redacted",
+    "party_id": 0,
+    "shipping_method": "redacted",
+    "app": "redacted"
+   },
+   "api_version": "v4"
+  }
+ },
+ "response": {
+  "metadata": {
+   "action": "estimate_place",
+   "api_version": "v4",
+   "direction": "incoming",
+   "order_id": "redacted",
+   "work_unit_id": "0FAKE000000000000000000002"
+  },
+  "document": {
+   "api_version": "v4",
+   "status_code": 500,
+   "headers": {
+    "server": "redacted",
+    "content-type": "redacted",
+    "date": "redacted",
+    "cache-control": "redacted",
+    "content-length": "redacted",
+    "x-envoy-upstream-service-time": "redacted",
+    "server-timing": "redacted",
+    "cf-team": "redacted"
+   },
+   "body": {
+    "error": {
+     "message": "redacted",
+     "status_code": 0
+    }
+   }
+  }
+ }
+}

@@ -35,7 +35,10 @@ class RawSpan:
     Times are nanoseconds since the epoch, None when absent or not integers. `error` is True
     when the span's status is `ERROR`; the status message is never read. `status_code` is the
     HTTP response status attribute, None when absent. `request_body` and `response_body` are a
-    client span's captured bodies, None when the span carries none; they are not in `repr`.
+    client span's captured bodies, None when the span carries none. `capture_uris` are the
+    URIs of the span's capture events, the request URI then the response URI of each event in
+    event order, empty when the source reads none; they hold values and stay in the tentacle's
+    memory. Bodies and URIs are not in `repr`.
     """
 
     trace_id: str | None
@@ -51,6 +54,7 @@ class RawSpan:
     links: tuple[RawLink, ...] = ()
     request_body: str | None = field(default=None, repr=False)
     response_body: str | None = field(default=None, repr=False)
+    capture_uris: tuple[str, ...] = field(default=(), repr=False)
 
 
 @dataclass(frozen=True)

@@ -6,20 +6,24 @@ import asyncio
 import json
 import logging
 import os
+import re
 import signal
 import socket
 from collections.abc import AsyncIterator, Callable, Mapping
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 import httpx
 import pytest
 import yaml
+from botocore.exceptions import ProfileNotFound
 
+import fire.apps.tentacle.sources as sources_module
 from fire.adapters.shapes.flat_star import FlatStarShapeGeneralizer
 from fire.adapters.shapes.sha256 import Sha256ShapeFingerprinter
+from fire.adapters.sources.s3_capture import S3CaptureSource
 from fire.apps.config import TentacleConfig
 from fire.apps.tentacle.__main__ import main
 from fire.apps.tentacle.runner import (
@@ -27,6 +31,7 @@ from fire.apps.tentacle.runner import (
     EXIT_STARTUP_ERROR,
     EXIT_UNSENT,
     Plan,
+    PlannedCapture,
     PlannedProxy,
     PlannedReceiver,
     PlannedSource,
@@ -35,9 +40,17 @@ from fire.apps.tentacle.runner import (
     run,
     run_tentacle,
 )
+from fire.core.domain.capture import (
+    CaptureEvent,
+    CaptureIndex,
+    CaptureLayout,
+    CaptureRule,
+    SpanRef,
+)
 from fire.core.domain.envelope import Envelope
 from fire.core.domain.observation import ChannelDirection, SpanKind
 from fire.core.domain.operation import OperationInputs, OperationNamer
+from fire.core.ports.capture_source import ObjectState, RawCapture
 from fire.core.ports.exchange_source import (
     ExchangeNote,
     ExchangeSink,
@@ -53,6 +66,7 @@ from fire.core.ports.span_source import (
     SpanRequestNote,
     SpanSink,
 )
+from fire.core.services.capture_pipeline import CapturePipeline
 from fire.core.services.exchange_pipeline import ExchangePipeline
 from fire.core.services.record_pipeline import RecordPipeline
 from fire.core.services.span_pipeline import SpanPipeline
@@ -717,7 +731,9 @@ class ScriptedReceiver:
         self.closed = True
 
 
-def _receiver_plan(receiver: ScriptedReceiver, **tentacle: Any) -> Plan:
+def _planned_receiver(
+    receiver: ScriptedReceiver, capture_event: CaptureEvent | None = None
+) -> PlannedReceiver:
     pipeline = SpanPipeline(
         system="shop",
         source="traces",
@@ -726,9 +742,17 @@ def _receiver_plan(receiver: ScriptedReceiver, **tentacle: Any) -> Plan:
         generalizer=FlatStarShapeGeneralizer(),
         fingerprinter=Sha256ShapeFingerprinter(),
     )
+    return PlannedReceiver(
+        id="traces", receiver=receiver, pipeline=pipeline, capture_event=capture_event
+    )
+
+
+def _receiver_plan(
+    receiver: ScriptedReceiver, capture_event: CaptureEvent | None = None, **tentacle: Any
+) -> Plan:
     return Plan(
         system="shop",
-        sources=[PlannedReceiver(id="traces", receiver=receiver, pipeline=pipeline)],
+        sources=[_planned_receiver(receiver, capture_event)],
         tentacle=TentacleConfig.model_validate(tentacle),
         url="http://body/v0/observations",
         token=TOKEN,
@@ -858,6 +882,462 @@ def test_prepare_opens_a_receiver_and_releases_it_on_a_later_startup_error(
     assert _run(fire_yml, environ) == EXIT_STARTUP_ERROR
     with socket.socket() as again:
         again.bind(("127.0.0.1", port))
+
+
+CAPTURE_EVENT = {
+    "name": "transmission.capture",
+    "request_uri": "transmission.request_uri",
+    "response_uri": "transmission.response_uri",
+    "ttl_s": 60,
+}
+ULID = "[0-7][0-9A-HJKMNP-TV-Z]{25}"
+WORK = "01JABCDEFGHJKMNPQRSTVWXYZ0"
+STAMP = "20261011_163001_123456"
+NARVAR = CaptureRule(
+    prefix="narvar-payloads/", label="narvar", layout=CaptureLayout.WORK_UNIT_ACTION
+)
+SHIPMENT = f"{WORK}/create_shipment_{STAMP}.json"
+CANCEL = f"{WORK}/cancel_shipment_{STAMP}.json"
+CHANNEL = "http:outbound:narvar:create_shipment"
+PAIR_ID = f"narvar:{WORK}:create_shipment:{STAMP}"
+CAPTURE_SPAN = SpanRef(TRACE, "e" * 16)
+
+
+def _capture_source(
+    source_id: str = "transmissions", bucket_env: str = "BUCKET"
+) -> dict[str, Any]:
+    return {
+        "id": source_id,
+        "kind": "s3_capture",
+        "bucket_env": bucket_env,
+        "work_id_pattern": ULID,
+        "captures": [NARVAR.model_dump(mode="json")],
+    }
+
+
+class _NoAws:
+    """An S3 client that fails a test if the tentacle calls it."""
+
+    def __getattr__(self, name: str) -> Any:
+        raise AssertionError(f"S3 called at startup: {name}")
+
+
+@pytest.fixture
+def no_aws(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(sources_module, "make_s3_client", _NoAws)
+
+
+@pytest.mark.unit
+def test_an_s3_capture_source_without_its_bucket_is_skipped(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, no_aws: None
+) -> None:
+    fire_yml = _configure(tmp_path, [_replay_source(), _capture_source()])
+    environ = _environ(_replay_file(tmp_path, [_record("1")]))
+
+    assert _run(fire_yml, environ) == EXIT_OK
+    assert "source skipped: source=transmissions reason=BUCKET is not set" in caplog.text
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "bucket",
+    [
+        "q7",
+        "q" * 64,
+        "Planted-Bucket",
+        "-planted-bucket",
+        "planted-bucket-",
+        "planted_bucket",
+        "planted bucket",
+        "s3://planted-bucket",
+        "planted-bucket/prefix",
+    ],
+    ids=[
+        "short",
+        "long",
+        "uppercase",
+        "leading-dash",
+        "trailing-dash",
+        "underscore",
+        "space",
+        "uri",
+        "slash",
+    ],
+)
+def test_an_s3_capture_bucket_must_be_a_bucket_name(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, no_aws: None, bucket: str
+) -> None:
+    fire_yml = _configure(tmp_path, [_capture_source()])
+
+    assert _run(fire_yml, _environ(BUCKET=bucket)) == EXIT_STARTUP_ERROR
+    assert "source transmissions: BUCKET is not an S3 bucket name" in caplog.text
+    assert bucket not in caplog.text
+
+
+@pytest.mark.unit
+def test_an_aws_environment_without_a_client_is_a_startup_error_by_type(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def no_profile() -> Any:
+        raise ProfileNotFound(profile="planted-profile")
+
+    monkeypatch.setattr(sources_module, "make_s3_client", no_profile)
+    fire_yml = _configure(tmp_path, [_capture_source()])
+
+    assert _run(fire_yml, _environ(BUCKET="transmission-data")) == EXIT_STARTUP_ERROR
+    assert "source transmissions: cannot build an S3 client (ProfileNotFound)" in caplog.text
+    assert "planted-profile" not in caplog.text
+    assert "transmission-data" not in caplog.text
+
+
+def _pair(name: str = SHIPMENT, **overrides: Any) -> RawCapture:
+    raw = RawCapture(
+        source="transmissions",
+        rule=NARVAR,
+        name=name,
+        response_state=ObjectState.FOUND,
+        response={"status_code": 201, "body": {"id": "x"}},
+        request_state=ObjectState.FOUND,
+        request={"method": "POST", "body": {"qty": 1}},
+    )
+    return replace(raw, **overrides)
+
+
+def _response_uri(name: str) -> str:
+    return f"s3://transmission-data/{NARVAR.prefix}responses/{name}"
+
+
+@pytest.mark.unit
+def test_prepare_plans_capture_sources_on_one_index_without_calling_aws(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, no_aws: None
+) -> None:
+    opened: list[dict[str, Any]] = []
+    real_receiver = sources_module.OtlpReceiver
+
+    def receiver(**kwargs: Any) -> Any:
+        opened.append(kwargs)
+        return real_receiver(**kwargs)
+
+    monkeypatch.setattr(sources_module, "OtlpReceiver", receiver)
+    traces = {**_otlp_source(), "capture_event": CAPTURE_EVENT}
+    sources = [traces, _capture_source(), _capture_source("more", "MORE_BUCKET")]
+    fire_yml = _configure(tmp_path, sources)
+    environ = _environ(
+        LISTEN=f"127.0.0.1:{_free_port()}", BUCKET="transmission-data", MORE_BUCKET="more.data"
+    )
+
+    plan = prepare("shop", config_path=fire_yml, environ=environ)
+    try:
+        received, *captures = plan.sources
+        assert isinstance(received, PlannedReceiver)
+        assert received.capture_event == CaptureEvent.model_validate(CAPTURE_EVENT)
+        assert [kwargs["capture_event"] for kwargs in opened] == [received.capture_event]
+        assert [type(planned).__name__ for planned in captures] == ["PlannedCapture"] * 2
+        assert all(isinstance(planned, PlannedCapture) for planned in captures)
+        assert all(isinstance(planned.source, S3CaptureSource) for planned in captures)
+
+        plan.capture_index.put(_response_uri(SHIPMENT), CAPTURE_SPAN, 60, datetime.now(UTC))
+        unattributed = f"unattributed/create_shipment_{STAMP}.json"
+        for planned in captures:
+            assert isinstance(planned, PlannedCapture)
+            joined = planned.pipeline.process(_pair())
+            assert {(s.work_id, s.trace_id, s.span_id) for s in joined.shapes} == {
+                (WORK, CAPTURE_SPAN.trace_id, CAPTURE_SPAN.span_id)
+            }
+            unjoined = planned.pipeline.process(_pair(unattributed))
+            assert {(s.work_id, s.trace_id) for s in unjoined.shapes} == {(None, None)}
+    finally:
+        for planned in plan.sources:
+            if isinstance(planned, PlannedReceiver):
+                planned.receiver.close()
+
+
+def _indexed(index: CaptureIndex, *uris: str, at: datetime | None = None) -> list[Any]:
+    now = at or datetime.now(UTC)
+    return [index.get(uri, now) for uri in uris]
+
+
+@pytest.mark.unit
+async def test_capture_uris_of_spans_sent_are_indexed_and_noted(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.INFO)
+    sent = (_response_uri(SHIPMENT), f"{NARVAR.prefix}requests/{SHIPMENT}")
+    invalid = (_response_uri(CANCEL),)
+    no_service = (f"{NARVAR.prefix}requests/{CANCEL}",)
+    batch = [
+        _raw_span("E" * 16, trace_id=TRACE.upper(), capture_uris=(*sent, "s3://bucket-only")),
+        _raw_span("b" * 16, trace_id=None, capture_uris=invalid),
+        _raw_span("c" * 16, service=None, capture_uris=no_service),
+    ]
+    receiver = ScriptedReceiver([batch])
+    plan = _receiver_plan(receiver, CaptureEvent.model_validate(CAPTURE_EVENT), flush_ms=1)
+
+    assert await _serve_briefly(plan, Body()) == EXIT_OK
+
+    assert receiver.results == [SpanBatchResult(True, 2)]
+    assert len(plan.capture_index) == 2
+    assert _indexed(plan.capture_index, *sent) == [CAPTURE_SPAN, CAPTURE_SPAN]
+    assert _indexed(plan.capture_index, *invalid, *no_service) == [None, None]
+    later = datetime.now(UTC) + timedelta(seconds=61)
+    assert _indexed(plan.capture_index, *sent, at=later) == [None, None]
+    assert "rejected=invalid_ids:1,no_service:1 skipped=- noted=capture_indexed:2 " in caplog.text
+
+
+@pytest.mark.unit
+async def test_a_batch_that_is_not_taken_indexes_nothing(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.INFO)
+    batch = [
+        _raw_span(f"{index + 1:016x}", capture_uris=(_response_uri(f"{index}.json"),))
+        for index in range(3)
+    ]
+    receiver = ScriptedReceiver([batch])
+    plan = _receiver_plan(
+        receiver, CaptureEvent.model_validate(CAPTURE_EVENT), buffer_size=2, flush_ms=1
+    )
+
+    assert await _serve_briefly(plan, Body()) == EXIT_OK
+
+    assert receiver.results == [SpanBatchResult(False)]
+    assert len(plan.capture_index) == 0
+    assert "noted=buffer_full:1 " in caplog.text
+
+
+@pytest.mark.unit
+async def test_a_receiver_without_a_capture_event_indexes_nothing(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.INFO)
+    receiver = ScriptedReceiver([[_raw_span("a" * 16, capture_uris=(_response_uri(SHIPMENT),))]])
+    plan = _receiver_plan(receiver, flush_ms=1)
+
+    assert await _serve_briefly(plan, Body()) == EXIT_OK
+
+    assert len(plan.capture_index) == 0
+    assert "source=traces read=1 built=1 sent=1 unsent=0 pending=0 rejected=- skipped=- " in (
+        caplog.text
+    )
+    assert "noted=- " in caplog.text
+
+
+class ScriptedCaptures:
+    """Yields pairs, counting what it handed out and recording acks; optionally fails or waits
+    forever.
+    """
+
+    def __init__(
+        self,
+        pairs: list[RawCapture],
+        *,
+        fail: bool = False,
+        live: bool = False,
+        acks: list[str] | None = None,
+    ) -> None:
+        self.pairs_to_yield = pairs
+        self.fail = fail
+        self.live = live
+        self.acks = [] if acks is None else acks
+        self.yielded = 0
+
+    async def pairs(self) -> AsyncIterator[RawCapture]:
+        await asyncio.sleep(0)
+        for raw in self.pairs_to_yield:
+            self.yielded += 1
+            yield replace(raw, ack=self._ack(raw.name))
+        if self.fail:
+            raise RuntimeError("planted-capture-detail")
+        if self.live:
+            await asyncio.Event().wait()
+
+    def _ack(self, name: str) -> Any:
+        async def ack() -> None:
+            self.acks.append(name)
+
+        return ack
+
+
+def _planned_capture(source: ScriptedCaptures, index: CaptureIndex) -> PlannedCapture:
+    pipeline = CapturePipeline(
+        system="shop",
+        source="transmissions",
+        sample_rate=1.0,
+        work_id_pattern=re.compile(ULID),
+        index=index,
+        generalizer=FlatStarShapeGeneralizer(),
+        fingerprinter=Sha256ShapeFingerprinter(),
+    )
+    return PlannedCapture(id="transmissions", source=source, pipeline=pipeline)
+
+
+def _capture_plan(source: ScriptedCaptures, **tentacle: Any) -> Plan:
+    index = CaptureIndex()
+    return Plan(
+        system="shop",
+        sources=[_planned_capture(source, index)],
+        tentacle=TentacleConfig.model_validate(tentacle),
+        url="http://body/v0/observations",
+        token=TOKEN,
+        capture_index=index,
+    )
+
+
+@pytest.mark.unit
+async def test_capture_pairs_are_shaped_sent_counted_and_acked(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.INFO)
+    missing = ObjectState.MISSING
+    no_response = f"{WORK}/notify_{STAMP}.json"
+    nothing = f"{WORK}/resend_{STAMP}.json"
+    unattributed = f"unattributed/create_shipment_{STAMP}.json"
+    pairs = [
+        _pair(),
+        _pair("stray.json"),
+        _pair(f"{WORK}/550e8400-e29b-41d4-a716-446655440000_{STAMP}.json"),
+        _pair(no_response, request_state=missing, request=None, response={"status_code": None}),
+        _pair(
+            nothing,
+            request_state=missing,
+            request=None,
+            response_state=ObjectState.UNDECODABLE,
+            response=None,
+        ),
+        _pair(CANCEL, request={"body": "not json"}),
+        _pair(),
+        _pair(unattributed),
+    ]
+    source = ScriptedCaptures(pairs)
+    plan = _capture_plan(source, flush_ms=1)
+    plan.capture_index.put(_response_uri(CANCEL), CAPTURE_SPAN, 60, datetime.now(UTC))
+    body = Body()
+    body.release.clear()
+    running = asyncio.create_task(run(plan, asyncio.Event(), transport=body.transport()))
+
+    await asyncio.sleep(0.1)
+    assert sorted(source.acks) == sorted(["stray.json", pairs[2].name, nothing, SHIPMENT])
+    body.release.set()
+
+    assert await asyncio.wait_for(running, 5) == EXIT_OK
+    assert sorted(source.acks) == sorted(
+        ["stray.json", pairs[2].name, nothing, SHIPMENT, SHIPMENT, SHIPMENT]
+        + [no_response, CANCEL, unattributed, unattributed]
+    )
+    shapes = {shape["observation_id"]: shape for shape in body.shapes}
+    assert sorted(shapes) == [
+        f"narvar:-:create_shipment:{STAMP}:request",
+        f"narvar:-:create_shipment:{STAMP}:response",
+        f"narvar:{WORK}:cancel_shipment:{STAMP}:response",
+        f"{PAIR_ID}:request",
+        f"{PAIR_ID}:response",
+        f"narvar:{WORK}:notify:{STAMP}:response",
+    ]
+    assert shapes[f"{PAIR_ID}:request"]["channel"] == {
+        "kind": "http",
+        "direction": "outbound",
+        "name": "narvar:create_shipment",
+        "part": "request",
+        "status_class": None,
+    }
+    assert shapes[f"narvar:{WORK}:notify:{STAMP}:response"]["channel"]["status_class"] == "none"
+    joined = shapes[f"narvar:{WORK}:cancel_shipment:{STAMP}:response"]
+    assert (joined["trace_id"], joined["span_id"], joined["work_id"]) == (
+        CAPTURE_SPAN.trace_id,
+        CAPTURE_SPAN.span_id,
+        WORK,
+    )
+    assert shapes[f"{PAIR_ID}:request"]["trace_id"] is None
+    assert shapes[f"narvar:-:create_shipment:{STAMP}:request"]["work_id"] is None
+    assert (
+        "tentacle counters: source=transmissions read=8 built=6 sent=6 unsent=0 pending=0 "
+        "rejected=bad_action:1,no_layout:1 "
+        "skipped=body_not_json:1,local_duplicate:1,object_missing:2,object_undecodable:1 "
+        "noted=unjoined:3 body_duplicate=0 body_rejected=-"
+    ) in caplog.text
+
+
+@pytest.mark.unit
+async def test_a_full_buffer_pauses_capture_reading() -> None:
+    source = ScriptedCaptures(
+        [_pair(f"{WORK}/create_shipment_20261011_163001_{index:06d}.json") for index in range(10)]
+    )
+    body = Body()
+    body.release.clear()
+    plan = _capture_plan(source, buffer_size=2, batch_size=1, flush_ms=1)
+    running = asyncio.create_task(run(plan, asyncio.Event(), transport=body.transport()))
+
+    await asyncio.sleep(0.2)
+    # One shape in flight, two in the buffer, and the second pair's last one waiting.
+    assert source.yielded == 2
+    body.release.set()
+
+    assert await asyncio.wait_for(running, 5) == EXIT_OK
+    assert source.yielded == 10
+    assert len(body.shapes) == 20
+
+
+@pytest.mark.unit
+async def test_failing_capture_source_exits_1_by_exception_type_only(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.DEBUG)
+    body = Body()
+    source = ScriptedCaptures([_pair()], fail=True)
+
+    assert await run(_capture_plan(source), asyncio.Event(), transport=body.transport()) == (
+        EXIT_UNSENT
+    )
+    assert "source failed: source=transmissions error=RuntimeError" in caplog.text
+    assert "planted-capture-detail" not in caplog.text
+    assert sorted(shape["observation_id"] for shape in body.shapes) == [
+        f"{PAIR_ID}:request",
+        f"{PAIR_ID}:response",
+    ]
+
+
+@pytest.mark.unit
+async def test_stop_ends_a_live_capture_source_and_drains() -> None:
+    body = Body()
+    source = ScriptedCaptures([_pair()], live=True)
+
+    assert await _serve_briefly(_capture_plan(source, flush_ms=1), body) == EXIT_OK
+    assert len(body.shapes) == 2
+
+
+@pytest.mark.unit
+async def test_a_receivers_capture_events_join_the_pairs_of_a_capture_source(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.INFO)
+    uri = _response_uri(SHIPMENT)
+    receiver = ScriptedReceiver([[_raw_span(CAPTURE_SPAN.span_id, capture_uris=(uri,))]])
+    captures = ScriptedCaptures([_pair()], live=True)
+    index = CaptureIndex()
+    plan = Plan(
+        system="shop",
+        sources=[
+            _planned_receiver(receiver, CaptureEvent.model_validate(CAPTURE_EVENT)),
+            _planned_capture(captures, index),
+        ],
+        tentacle=TentacleConfig.model_validate({"flush_ms": 1}),
+        url="http://body/v0/observations",
+        token=TOKEN,
+        capture_index=index,
+    )
+    body = Body()
+
+    assert await _serve_briefly(plan, body) == EXIT_OK
+
+    assert {(shape["trace_id"], shape["span_id"]) for shape in body.shapes} == {
+        (CAPTURE_SPAN.trace_id, CAPTURE_SPAN.span_id)
+    }
+    assert "source=traces read=1 built=1 sent=1 " in caplog.text
+    assert "noted=capture_indexed:1 " in caplog.text
+    assert "source=transmissions read=1 built=2 sent=2 unsent=0 pending=0 rejected=- " in (
+        caplog.text
+    )
+    assert "skipped=- noted=- body_duplicate=0" in caplog.text
 
 
 @pytest.mark.unit

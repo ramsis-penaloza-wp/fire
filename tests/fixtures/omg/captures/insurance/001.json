@@ -1,0 +1,85 @@
+{
+ "prefix": "insurance-payloads/",
+ "name": "0FAKE000000000000000000001/calculate_contracted_loss_20261011_121000_000003.json",
+ "request": {
+  "metadata": {
+   "action": "calculate_contracted_loss",
+   "direction": "outgoing",
+   "work_unit_id": "0FAKE000000000000000000001"
+  },
+  "document": {
+   "method": "POST",
+   "url": "redacted",
+   "headers": {
+    "host": "redacted",
+    "accept": "redacted",
+    "accept-encoding": "redacted",
+    "connection": "redacted",
+    "user-agent": "redacted",
+    "content-type": "redacted",
+    "authorization": "redacted",
+    "x-request-id": "redacted",
+    "traceparent": "redacted",
+    "content-length": "redacted"
+   },
+   "body": {
+    "items_per_type": {
+     "frame": [
+      {
+       "so_item_info": {
+        "id": "redacted",
+        "amount_in_cents": 0,
+        "quantity": 0
+       },
+       "pc_product_info": {
+        "has_blue_light": false,
+        "has_progressive": false,
+        "has_precision_progressive": false,
+        "has_photochromic": false,
+        "has_flash": false,
+        "is_sun": false,
+        "has_high_index": false,
+        "has_ultra_high_index": false,
+        "has_anti_fatigue": false,
+        "has_transition_xtractive": false,
+        "is_specialized_fitting": false,
+        "has_non_polarized": false,
+        "price": 0,
+        "is_telehealth": false,
+        "has_backside_ar": false,
+        "is_wrapped_frame": false
+       }
+      }
+     ]
+    },
+    "insurance_carrier": "redacted",
+    "member_group": "redacted",
+    "full_benefit_amount": 0,
+    "sales_order_id": "redacted",
+    "is_claim_submitted": false,
+    "order_date_of_service": "1970-01-01T00:00:00Z"
+   }
+  }
+ },
+ "response": {
+  "metadata": {
+   "action": "calculate_contracted_loss",
+   "direction": "incoming",
+   "work_unit_id": "0FAKE000000000000000000001"
+  },
+  "document": {
+   "status_code": 200,
+   "headers": {
+    "date": "redacted",
+    "content-type": "redacted",
+    "content-length": "redacted"
+   },
+   "body": {
+    "contracted_loss_amount": 0,
+    "admin_fee_amount": 0,
+    "contracted_loss_by_item": {},
+    "admin_fee_by_item": {}
+   }
+  }
+ }
+}
