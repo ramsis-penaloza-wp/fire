@@ -18,11 +18,18 @@ discovery:
     path_env: OMG_MANIFEST_PATH
 
 # Where the tentacle reads. Contract: docs/specs/tentacle.md#sources-in-the-system-yaml.
-# `replay`, `http_proxy`, and `otlp` run so far; the tentacle skips the others and says so.
+# `replay`, `s3_capture`, `http_proxy`, and `otlp` run so far; the tentacle skips the others and
+# says so.
 sources:
   # Spans from OMG's OpenTelemetry collector, which dev/omg/ gives one more exporter, to
   # host.docker.internal:4318. Contract: docs/specs/http-and-span-capture.md#otlp-receiver.
-  - {id: omg-traces, kind: otlp, listen_env: OMG_OTLP_LISTEN}
+  # OMG's transmission captures add `transmission.capture` to the active span, naming the S3
+  # keys of the pair, so `transmissions` below joins each pair to its span.
+  - id: omg-traces
+    kind: otlp
+    listen_env: OMG_OTLP_LISTEN
+    capture_event: {name: transmission.capture, request_uri: omg.transmission.request_uri,
+                    response_uri: omg.transmission.response_uri}
   # Inbound HTTP: post to the proxy port instead of the service's. Route templates come from
   # each upstream's /openapi.json. Contract: docs/specs/http-and-span-capture.md#inbound-proxy.
   # Upstream port + 100. Not 8021: macOS's launchd can hold localhost:8021 for its ftp-proxy.
@@ -68,10 +75,14 @@ sources:
     regions: [us-east-1, us-west-2]     # to be confirmed
     envelope: {event_id: MessageId, event_type: Message.event_type,
                occurred_at: Message.published_at, payload: Message}
-  # Request and response pairs OMG's partner clients write to its transmission bucket.
+  # Request and response pairs OMG's partner clients write to its transmission bucket, read
+  # 10 s after each response lands. Work units are ULIDs; Oracle files unbound calls under
+  # `unattributed`, which gives no work_id. Order Services writes no action, so its pairs count
+  # as missing_action. Contract: docs/specs/tentacle.md#kinds.
   - id: transmissions
     kind: s3_capture
     bucket_env: OMG_TRANSMISSION_BUCKET
+    work_id_pattern: "[0-7][0-9A-HJKMNP-TV-Z]{25}"
     captures:
       - {prefix: narvar-payloads/, label: narvar, layout: work_unit_action}
       - {prefix: insurance-payloads/, label: insurance, layout: work_unit_action}

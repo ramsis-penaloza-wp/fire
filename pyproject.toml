@@ -13,10 +13,12 @@ dependencies = [
     "python-dotenv>=1.0",
     "email-validator>=2.0",
     "httpcore>=1.0",
+    "boto3>=1.35",
 ]
 
 [dependency-groups]
 dev = [
+    "moto[s3]>=5.0",
     "pytest>=8.0",
     "pytest-asyncio>=1.0",
     "ruff>=0.8",

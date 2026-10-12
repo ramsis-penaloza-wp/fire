@@ -2,7 +2,8 @@
 signal arrives. Contract: docs/specs/tentacle.md#process.
 
 Logs hold source ids, env var names, counters, reason codes, and exception type names; never a
-record, a payload, or the text of an exception raised while a record is in hand.
+record, a payload, an S3 key, bucket name, or object metadata, or the text of an exception
+raised while a record is in hand.
 """
 
 from __future__ import annotations
@@ -14,7 +15,8 @@ import os
 import re
 import signal
 from collections.abc import Callable, Coroutine, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +29,7 @@ from fire.apps.config import (
     EventSourceConfig,
     HttpProxySourceConfig,
     OtlpSourceConfig,
+    S3CaptureSourceConfig,
     SourceConfig,
     SystemConfig,
     TentacleConfig,
@@ -40,8 +43,11 @@ from fire.apps.tentacle.sources import (
     SourceUnavailable,
     open_http_proxy,
     open_otlp_receiver,
+    open_s3_capture,
 )
+from fire.core.domain.capture import CaptureEvent, CaptureIndex, SpanRef, object_key
 from fire.core.domain.operation import OperationNamer
+from fire.core.ports.capture_source import CaptureSource
 from fire.core.ports.exchange_source import (
     ExchangeNote,
     ExchangeSkipReason,
@@ -50,9 +56,10 @@ from fire.core.ports.exchange_source import (
 )
 from fire.core.ports.record_source import RecordSource, StartPosition
 from fire.core.ports.span_source import RawSpan, SpanBatchResult, SpanRequestNote, SpanSource
+from fire.core.services.capture_pipeline import CapturePipeline
 from fire.core.services.exchange_pipeline import ExchangePipeline, PartSkipped
 from fire.core.services.record_pipeline import RecordPipeline, Rejected, Skipped
-from fire.core.services.span_pipeline import SpanPipeline
+from fire.core.services.span_pipeline import SpanOutcome, SpanPipeline
 
 logger = logging.getLogger(__name__)
 
@@ -89,20 +96,33 @@ class PlannedReceiver:
     id: str
     receiver: SpanSource
     pipeline: SpanPipeline
+    # The span event whose URIs go in the plan's capture index; None indexes nothing.
+    capture_event: CaptureEvent | None = None
 
 
-type Planned = PlannedSource | PlannedProxy | PlannedReceiver
+@dataclass(frozen=True)
+class PlannedCapture:
+    id: str
+    source: CaptureSource
+    pipeline: CapturePipeline
+
+
+type Planned = PlannedSource | PlannedProxy | PlannedReceiver | PlannedCapture
 
 
 @dataclass(frozen=True)
 class Plan:
-    """What a checked startup runs: the sources to read and where to send."""
+    """What a checked startup runs: the sources to read and where to send.
+
+    `capture_index` is the one index the receivers fill and the capture pipelines read.
+    """
 
     system: str
     sources: list[Planned]
     tentacle: TentacleConfig
     url: str
     token: str
+    capture_index: CaptureIndex = field(default_factory=CaptureIndex)
 
 
 def prepare(
@@ -141,11 +161,12 @@ def prepare(
         raise StartupError(f"system {system!r} declares no source {source!r} (declared: {known})")
     chosen = [declared[source]] if source is not None else list(declared.values())
 
+    index = CaptureIndex()
     planned: list[Planned] = []
     try:
         for config in chosen:
             try:
-                planned.append(_open(config, system_config, start, environ))
+                planned.append(_open(config, system_config, start, environ, index))
             except _Skip as skip:
                 if source is not None:
                     raise StartupError(f"source {config.id}: {skip}") from None
@@ -165,6 +186,7 @@ def prepare(
         tentacle=fire_config.tentacle,
         url=url,
         token=token,
+        capture_index=index,
     )
 
 
@@ -197,7 +219,9 @@ def _open(
     system: SystemConfig,
     start: StartPosition,
     environ: Mapping[str, str],
+    index: CaptureIndex,
 ) -> Planned:
+    """Opens one source; a capture source's pipeline reads `index`, the plan's capture index."""
     location = environ.get(config.location_env)
     if not location:
         raise _Skip(f"{config.location_env} is not set")
@@ -214,7 +238,28 @@ def _open(
             generalizer=FlatStarShapeGeneralizer(),
             fingerprinter=Sha256ShapeFingerprinter(),
         )
-        return PlannedReceiver(id=config.id, receiver=receiver, pipeline=spans)
+        return PlannedReceiver(
+            id=config.id,
+            receiver=receiver,
+            pipeline=spans,
+            capture_event=config.capture_event,
+        )
+    if isinstance(config, S3CaptureSourceConfig):
+        try:
+            captures = open_s3_capture(config, location, start)
+        except SourceUnavailable as error:
+            raise StartupError(f"source {config.id}: {error}") from None
+        pattern = config.work_id_pattern
+        pairs = CapturePipeline(
+            system=system.system,
+            source=config.id,
+            sample_rate=system.fingerprinting.sample_rate,
+            work_id_pattern=None if pattern is None else re.compile(pattern),
+            index=index,
+            generalizer=FlatStarShapeGeneralizer(),
+            fingerprinter=Sha256ShapeFingerprinter(),
+        )
+        return PlannedCapture(id=config.id, source=captures, pipeline=pairs)
     if isinstance(config, HttpProxySourceConfig):
         try:
             proxy = open_http_proxy(config, location)
@@ -313,7 +358,9 @@ async def run(
         reporting = asyncio.create_task(_report(counters, counters_interval_s))
         stopping = asyncio.create_task(stop.wait())
         readers = [
-            asyncio.create_task(_run_source(planned, queue, counters[planned.id]))
+            asyncio.create_task(
+                _run_source(planned, queue, counters[planned.id], plan.capture_index)
+            )
             for planned in plan.sources
         ]
 
@@ -358,12 +405,17 @@ async def run(
 
 
 def _run_source(
-    planned: Planned, queue: asyncio.Queue[Outgoing | None], counters: SourceCounters
+    planned: Planned,
+    queue: asyncio.Queue[Outgoing | None],
+    counters: SourceCounters,
+    index: CaptureIndex,
 ) -> Coroutine[Any, Any, bool]:
     if isinstance(planned, PlannedProxy):
         return _forward(planned, queue, counters)
     if isinstance(planned, PlannedReceiver):
-        return _receive(planned, queue, counters)
+        return _receive(planned, queue, counters, index)
+    if isinstance(planned, PlannedCapture):
+        return _capture(planned, queue, counters)
     return _read(planned, queue, counters)
 
 
@@ -391,6 +443,32 @@ async def _read(
     return True
 
 
+async def _capture(
+    planned: PlannedCapture, queue: asyncio.Queue[Outgoing | None], counters: SourceCounters
+) -> bool:
+    """Reads one capture source until its task is cancelled; False when it failed. A pair
+    counts as one `read`; a full queue pauses reading.
+    """
+    try:
+        async for raw in planned.source.pairs():
+            counters.read += 1
+            outcome = planned.pipeline.process(raw)
+            if outcome.rejected is not None:
+                counters.rejected[outcome.rejected] += 1
+            counters.skipped.update(outcome.skipped)
+            counters.noted.update(outcome.noted)
+            if not outcome.shapes:
+                await settle(raw.ack, planned.id)
+            for shape in outcome.shapes:
+                counters.built += 1
+                await queue.put(Outgoing(shape, raw.ack))
+            await asyncio.sleep(0)
+    except Exception as error:
+        logger.error("source failed: source=%s error=%s", planned.id, type(error).__name__)
+        return False
+    return True
+
+
 async def _forward(
     planned: PlannedProxy, queue: asyncio.Queue[Outgoing | None], counters: SourceCounters
 ) -> bool:
@@ -404,11 +482,15 @@ async def _forward(
 
 
 async def _receive(
-    planned: PlannedReceiver, queue: asyncio.Queue[Outgoing | None], counters: SourceCounters
+    planned: PlannedReceiver,
+    queue: asyncio.Queue[Outgoing | None],
+    counters: SourceCounters,
+    index: CaptureIndex,
 ) -> bool:
     """Serves one receiver until its task is cancelled; False when it failed."""
+    sink = _SpanCounter(planned.pipeline, queue, counters, index, planned.capture_event)
     try:
-        await planned.receiver.serve(_SpanCounter(planned.pipeline, queue, counters))
+        await planned.receiver.serve(sink)
     except Exception as error:
         logger.error("source failed: source=%s error=%s", planned.id, type(error).__name__)
         return False
@@ -461,8 +543,10 @@ class _SpanCounter:
     """The sink a receiver reports to: it maps each request's spans and queues what they built.
 
     A batch is taken whole or not at all: when its observations do not all fit the queue,
-    nothing is counted or queued, `buffer_full` is noted, and the receiver asks the sender to
-    retry, so the collector's queue holds the spans. A span counts as one `read`.
+    nothing is counted, queued, or indexed, `buffer_full` is noted, and the receiver asks the
+    sender to retry, so the collector's queue holds the spans. A span counts as one `read`.
+    With `capture_event`, each capture URI of a span the batch sends maps the URI's object key
+    to the span's ids in `index` for the event's `ttl_s`, noted as `capture_indexed`.
     """
 
     def __init__(
@@ -470,10 +554,14 @@ class _SpanCounter:
         pipeline: SpanPipeline,
         queue: asyncio.Queue[Outgoing | None],
         counters: SourceCounters,
+        index: CaptureIndex,
+        capture_event: CaptureEvent | None = None,
     ) -> None:
         self._pipeline = pipeline
         self._queue = queue
         self._counters = counters
+        self._index = index
+        self._capture_event = capture_event
 
     def spans(self, spans: Sequence[RawSpan]) -> SpanBatchResult:
         outcomes = [self._pipeline.process(span) for span in spans]
@@ -490,11 +578,29 @@ class _SpanCounter:
                 self._counters.rejected[outcome.rejected] += 1
             self._counters.skipped.update(outcome.skipped)
             self._counters.noted.update(outcome.noted)
+        self._index_captures(spans, outcomes)
         rejected = sum(1 for outcome in outcomes if outcome.rejected is not None)
         return SpanBatchResult(taken=True, rejected=rejected)
 
     def note(self, reason: SpanRequestNote) -> None:
         self._counters.noted[reason] += 1
+
+    def _index_captures(self, spans: Sequence[RawSpan], outcomes: Sequence[SpanOutcome]) -> None:
+        """Indexes the capture URIs of the spans that gave a span observation; a URI with no
+        object key, such as a bare bucket, is not a key.
+        """
+        event = self._capture_event
+        if event is None:
+            return
+        now = datetime.now(UTC)
+        for raw, outcome in zip(spans, outcomes, strict=True):
+            if outcome.span is None:
+                continue
+            span = SpanRef(outcome.span.trace_id, outcome.span.span_id)
+            for uri in raw.capture_uris:
+                if object_key(uri):
+                    self._index.put(uri, span, event.ttl_s, now)
+                    self._counters.noted["capture_indexed"] += 1
 
 
 async def _report(counters: Mapping[str, SourceCounters], interval_s: float) -> None:

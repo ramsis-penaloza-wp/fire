@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from enum import StrEnum
+import re
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
@@ -10,6 +10,7 @@ import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from fire.core.domain.baseline import DriftPolicy
+from fire.core.domain.capture import CaptureEvent, CaptureRule
 from fire.core.domain.envelope import DottedPath, Envelope
 from fire.core.domain.flow import PathPolicy
 from fire.core.domain.observation import ChannelDirection
@@ -187,30 +188,48 @@ class SnsFanoutSourceConfig(EventSourceConfig):
         return self.topic_env
 
 
-class CaptureLayout(StrEnum):
-    WORK_UNIT_ACTION = "work_unit_action"
-    WORK_UNIT_ORDER_ACTION = "work_unit_order_action"
-    WORK_UNIT_ORDER = "work_unit_order"
-
-
-class CaptureConfig(_Strict):
-    prefix: str = Field(min_length=1)
-    # Starts the channel names of this client's calls.
-    label: Slug
-    layout: CaptureLayout
-
-
 class S3CaptureSourceConfig(_Source):
+    """Request and response pairs a system's clients write to a bucket. Contract:
+    docs/specs/tentacle.md#kinds.
+    """
+
     kind: Literal["s3_capture"]
     bucket_env: EnvName
-    captures: list[CaptureConfig] = Field(min_length=1)
+    # Per client: its key prefix, the label that starts its channel names, and its layout.
+    captures: list[CaptureRule] = Field(min_length=1)
+    poll_s: float = Field(default=5, gt=0)
+    # A response is read once it is this old, so both halves have landed.
+    settle_s: float = Field(default=10, ge=0)
+    max_object_bytes: int = Field(default=1_048_576, ge=1)
+    # A work segment that does not match in full gives no work_id; unset, every segment does.
+    work_id_pattern: str | None = Field(default=None, min_length=1)
+
+    @field_validator("work_id_pattern")
+    @classmethod
+    def _pattern_compiles(cls, pattern: str | None) -> str | None:
+        if pattern is not None:
+            try:
+                re.compile(pattern)
+            except re.error as error:
+                raise ValueError(f"work_id_pattern is not a regular expression: {error}") from None
+        return pattern
 
     @model_validator(mode="after")
-    def _prefixes_are_unique(self) -> S3CaptureSourceConfig:
+    def _prefixes_do_not_overlap(self) -> S3CaptureSourceConfig:
         prefixes = [capture.prefix for capture in self.captures]
         duplicates = sorted({prefix for prefix in prefixes if prefixes.count(prefix) > 1})
         if duplicates:
             raise ValueError(f"duplicate capture prefixes: {', '.join(duplicates)}")
+        nested = sorted(
+            {
+                inner
+                for inner in prefixes
+                for outer in prefixes
+                if inner != outer and inner.startswith(outer)
+            }
+        )
+        if nested:
+            raise ValueError(f"capture prefixes inside another prefix: {', '.join(nested)}")
         return self
 
     @property
@@ -245,6 +264,9 @@ class OtlpSourceConfig(_Source):
     kind: Literal["otlp"]
     # Holds the address the receiver listens on, host:port, such as 127.0.0.1:4318.
     listen_env: EnvName
+    # The span event a client adds when it writes a transmission capture. Contract:
+    # docs/specs/http-and-span-capture.md#capture-events.
+    capture_event: CaptureEvent | None = None
 
     @property
     def location_env(self) -> str:

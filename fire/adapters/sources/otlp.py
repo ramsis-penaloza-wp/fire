@@ -1,10 +1,11 @@
 """OTLP/HTTP JSON receiver SpanSource: takes `POST /v1/traces` from an OpenTelemetry collector
-and reports each request's spans to a sink, holding only the attributes of the allowlist.
+and reports each request's spans to a sink, holding only the attributes of the allowlist and,
+when a capture event is set, the two URIs of each capture event.
 
 The OTLP JSON encoding is parsed with the standard library: hex ids, integer or named enums,
 and nanosecond timestamps as strings. Logs hold the source id, status codes, reason codes, and
-exception type names; never an attribute, a body, or the text of an exception. Contract:
-docs/specs/http-and-span-capture.md#otlp-receiver.
+exception type names; never an attribute, a body, a capture URI, or the text of an exception.
+Contract: docs/specs/http-and-span-capture.md#otlp-receiver and #capture-events.
 """
 
 from __future__ import annotations
@@ -25,6 +26,7 @@ from fire.adapters.sources.listener import (
     quiet_server,
     serve_until_cancelled,
 )
+from fire.core.domain.capture import CaptureEvent
 from fire.core.domain.observation import SpanKind
 from fire.core.domain.operation import OperationInputs
 from fire.core.ports.span_source import (
@@ -89,7 +91,8 @@ class OtlpReceiver:
     `application/json`, plain or gzip, up to `max_request_bytes` as sent and once decoded.
     Protobuf or another coding gets `415`, a body that is not an `ExportTraceServiceRequest`
     `400`, a larger one `413`, and a batch the sink has no room for `503` with `Retry-After`;
-    otherwise `200`. `serve` runs once and closes `sock` when it stops.
+    otherwise `200`. With `capture_event`, each span's events of that name give its
+    `capture_uris`. `serve` runs once and closes `sock` when it stops.
     """
 
     def __init__(
@@ -99,11 +102,13 @@ class OtlpReceiver:
         sock: socket.socket,
         shutdown_s: float = 5.0,
         max_request_bytes: int = MAX_REQUEST_BYTES,
+        capture_event: CaptureEvent | None = None,
     ) -> None:
         self._source = source
         self._sock = sock
         self._shutdown_s = shutdown_s
         self._max_request_bytes = max_request_bytes
+        self._capture_event = capture_event
         self._refusals_logged: set[SpanRequestNote] = set()
         self._receiving = False
 
@@ -159,7 +164,7 @@ class OtlpReceiver:
             await self._refuse(response, sink, SpanRequestNote.REQUEST_TOO_LARGE)
             return
         try:
-            spans = parse_traces(json.loads(body))
+            spans = parse_traces(json.loads(body), self._capture_event)
         except (ValueError, RecursionError):
             await self._refuse(response, sink, SpanRequestNote.MALFORMED_REQUEST)
             return
@@ -263,23 +268,29 @@ def _media_type(headers: list[tuple[bytes, bytes]]) -> str | None:
     return None if content_type is None else content_type.split(";", 1)[0].strip().lower()
 
 
-def parse_traces(document: Any) -> list[RawSpan]:
+def parse_traces(document: Any, capture_event: CaptureEvent | None = None) -> list[RawSpan]:
     """The spans of an OTLP JSON `ExportTraceServiceRequest`.
 
-    Raises ValueError when a container (the request, `resourceSpans`, `resource`, `scopeSpans`,
-    `spans`, `attributes`, `events`, `links`, `status`, or an attribute) has the wrong JSON
-    type. A leaf of the wrong type, such as a numeric `traceId`, reads as absent.
+    With `capture_event`, a span's events of its name give the span's `capture_uris`; without
+    it, those events are skipped unread. Raises ValueError when a container (the request,
+    `resourceSpans`, `resource`, `scopeSpans`, `spans`, `attributes`, `events`, `links`,
+    `status`, or an attribute) has the wrong JSON type. A leaf of the wrong type, such as a
+    numeric `traceId`, reads as absent.
     """
     spans: list[RawSpan] = []
     for resource_spans in _objects(_object(document), "resourceSpans"):
         resource = _attributes(_object(resource_spans.get("resource")), RESOURCE_ATTRIBUTES)
         service = _string(resource.get("service.name"))
         for scope_spans in _objects(resource_spans, "scopeSpans"):
-            spans.extend(_span(span, service) for span in _objects(scope_spans, "spans"))
+            spans.extend(
+                _span(span, service, capture_event) for span in _objects(scope_spans, "spans")
+            )
     return spans
 
 
-def _span(span: Mapping[str, Any], service: str | None) -> RawSpan:
+def _span(
+    span: Mapping[str, Any], service: str | None, capture_event: CaptureEvent | None
+) -> RawSpan:
     attributes = _attributes(span, SPAN_ATTRIBUTES)
     kind_value = span.get("kind")
     kind = (
@@ -318,6 +329,7 @@ def _span(span: Mapping[str, Any], service: str | None) -> RawSpan:
         ),
         request_body=_string(attributes.get("http.request.body")),
         response_body=_response_body(span),
+        capture_uris=_capture_uris(span, capture_event),
     )
 
 
@@ -327,6 +339,23 @@ def _response_body(span: Mapping[str, Any]) -> str | None:
         if event.get("name") == RESPONSE_BODY_EVENT:
             return _string(_attributes(event, EVENT_ATTRIBUTES).get(RESPONSE_BODY_EVENT))
     return None
+
+
+def _capture_uris(span: Mapping[str, Any], capture_event: CaptureEvent | None) -> tuple[str, ...]:
+    """The non-empty string URIs of each event named `capture_event.name`, request then
+    response, in event order. Every other attribute of those events, and every event of another
+    name, is skipped unread.
+    """
+    if capture_event is None:
+        return ()
+    keys = (capture_event.request_uri, capture_event.response_uri)
+    allowed = frozenset(keys)
+    uris: list[str] = []
+    for event in _objects(span, "events"):
+        if event.get("name") == capture_event.name:
+            found = _attributes(event, allowed)
+            uris.extend(uri for key in keys if (uri := _string(found.get(key))))
+    return tuple(uris)
 
 
 def _object(value: Any) -> Mapping[str, Any]:

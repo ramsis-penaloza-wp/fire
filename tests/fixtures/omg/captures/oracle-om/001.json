@@ -1,0 +1,452 @@
+{
+ "prefix": "oracle-payloads/",
+ "name": "0FAKE000000000000000000001/ORDER1_create_20261011_120000_000001.json",
+ "request": {
+  "metadata": {
+   "action": "create",
+   "direction": "outgoing",
+   "order_id": "redacted",
+   "work_unit_id": "0FAKE000000000000000000001"
+  },
+  "document": {
+   "method": "POST",
+   "url": "redacted",
+   "headers": {
+    "host": "redacted",
+    "accept": "redacted",
+    "accept-encoding": "redacted",
+    "connection": "redacted",
+    "user-agent": "redacted",
+    "content-type": "redacted",
+    "authorization": "redacted",
+    "x-request-id": "redacted",
+    "traceparent": "redacted",
+    "content-length": "redacted"
+   },
+   "body": {
+    "SourceTransactionNumber": "redacted",
+    "SourceTransactionSystem": "redacted",
+    "SourceTransactionId": "redacted",
+    "TransactionalCurrencyCode": "redacted",
+    "BusinessUnitId": 0,
+    "SalesChannelCode": "redacted",
+    "TransactionTypeCode": "redacted",
+    "BuyingPartyNumber": "redacted",
+    "PaymentTerms": "redacted",
+    "SubmittedFlag": false,
+    "FreezePriceFlag": false,
+    "FreezeShippingChargeFlag": false,
+    "FreezeTaxFlag": false,
+    "CustomerPONumber": null,
+    "RequestingBusinessUnitId": 0,
+    "billToCustomer": [
+     {
+      "CustomerAccountId": 0,
+      "SiteUseId": 0
+     }
+    ],
+    "shipToCustomer": [
+     {
+      "PartyId": 0,
+      "SiteId": 0
+     }
+    ],
+    "lines": [
+     {
+      "SourceTransactionLineId": "redacted",
+      "SourceTransactionLineNumber": "redacted",
+      "SourceScheduleNumber": "redacted",
+      "SourceTransactionScheduleId": "redacted",
+      "OrderedUOMCode": "redacted",
+      "OrderedQuantity": 0,
+      "ProductNumber": "redacted",
+      "PaymentTerms": "redacted",
+      "BillingTransactionTypeName": "redacted",
+      "RequestedFulfillmentOrganizationCode": "redacted",
+      "TransactionLineTypeCode": "redacted",
+      "charges": [
+       {
+        "SourceChargeId": "redacted",
+        "PriceTypeCode": "redacted",
+        "ChargeTypeCode": "redacted",
+        "ChargeSubtypeCode": "redacted",
+        "ChargeDefinitionCode": "redacted",
+        "ChargeCurrencyCode": "redacted",
+        "PricedQuantityUOMCode": "redacted",
+        "ApplyToCode": "redacted",
+        "PricedQuantity": 0,
+        "SequenceNumber": 0,
+        "RollupFlag": false,
+        "CanAdjustFlag": false,
+        "PrimaryFlag": false,
+        "chargeComponents": [
+         {
+          "SourceChargeComponentId": "redacted",
+          "ChargeCurrencyUnitPrice": 0.0,
+          "ChargeCurrencyExtendedAmount": 0.0,
+          "ChargeCurrencyCode": "redacted",
+          "HeaderCurrencyCode": "redacted",
+          "PriceElementCode": "redacted",
+          "PriceElementUsageCode": "redacted",
+          "SequenceNumber": 0,
+          "RollupFlag": false,
+          "HeaderCurrencyUnitPrice": 0.0,
+          "HeaderCurrencyExtendedAmount": 0.0
+         },
+         {
+          "SourceChargeComponentId": "redacted",
+          "ChargeCurrencyUnitPrice": 0.0,
+          "ChargeCurrencyExtendedAmount": 0.0,
+          "ChargeCurrencyCode": "redacted",
+          "HeaderCurrencyCode": "redacted",
+          "PriceElementCode": "redacted",
+          "PriceElementUsageCode": "redacted",
+          "SequenceNumber": 0,
+          "RollupFlag": false,
+          "HeaderCurrencyUnitPrice": 0.0,
+          "HeaderCurrencyExtendedAmount": 0.0,
+          "Explanation": "redacted"
+         },
+         {
+          "SourceChargeComponentId": "redacted",
+          "ChargeCurrencyUnitPrice": 0.0,
+          "ChargeCurrencyExtendedAmount": 0.0,
+          "ChargeCurrencyCode": "redacted",
+          "HeaderCurrencyCode": "redacted",
+          "PriceElementCode": "redacted",
+          "PriceElementUsageCode": "redacted",
+          "SequenceNumber": 0,
+          "RollupFlag": false,
+          "HeaderCurrencyUnitPrice": 0.0,
+          "HeaderCurrencyExtendedAmount": 0.0,
+          "Explanation": "redacted"
+         },
+         {
+          "SourceChargeComponentId": "redacted",
+          "ChargeCurrencyUnitPrice": 0.0,
+          "ChargeCurrencyExtendedAmount": 0.0,
+          "ChargeCurrencyCode": "redacted",
+          "HeaderCurrencyCode": "redacted",
+          "PriceElementCode": "redacted",
+          "PriceElementUsageCode": "redacted",
+          "SequenceNumber": 0,
+          "RollupFlag": false,
+          "HeaderCurrencyUnitPrice": 0.0,
+          "HeaderCurrencyExtendedAmount": 0.0,
+          "Explanation": "redacted"
+         },
+         {
+          "SourceChargeComponentId": "redacted",
+          "ChargeCurrencyUnitPrice": 0.0,
+          "ChargeCurrencyExtendedAmount": 0.0,
+          "ChargeCurrencyCode": "redacted",
+          "HeaderCurrencyCode": "redacted",
+          "PriceElementCode": "redacted",
+          "PriceElementUsageCode": "redacted",
+          "SequenceNumber": 0,
+          "RollupFlag": false,
+          "HeaderCurrencyUnitPrice": 0.0,
+          "HeaderCurrencyExtendedAmount": 0.0,
+          "Explanation": "redacted"
+         },
+         {
+          "SourceChargeComponentId": "redacted",
+          "ChargeCurrencyUnitPrice": 0.0,
+          "ChargeCurrencyExtendedAmount": 0.0,
+          "ChargeCurrencyCode": "redacted",
+          "HeaderCurrencyCode": "redacted",
+          "PriceElementCode": "redacted",
+          "PriceElementUsageCode": "redacted",
+          "SequenceNumber": 0,
+          "RollupFlag": false,
+          "HeaderCurrencyUnitPrice": 0.0,
+          "HeaderCurrencyExtendedAmount": 0.0,
+          "Explanation": "redacted"
+         },
+         {
+          "SourceChargeComponentId": "redacted",
+          "ChargeCurrencyUnitPrice": 0.0,
+          "ChargeCurrencyExtendedAmount": 0.0,
+          "ChargeCurrencyCode": "redacted",
+          "HeaderCurrencyCode": "redacted",
+          "PriceElementCode": "redacted",
+          "PriceElementUsageCode": "redacted",
+          "SequenceNumber": 0,
+          "RollupFlag": false,
+          "HeaderCurrencyUnitPrice": 0.0,
+          "HeaderCurrencyExtendedAmount": 0.0
+         }
+        ]
+       }
+      ],
+      "additionalInformation": [
+       {
+        "Category": "redacted",
+        "FulfillLineEffBRevenue_5FManagement_5FInformation_5FLineprivateVO": [
+         {
+          "ContextCode": "redacted",
+          "costCenter": "redacted",
+          "productSegment": "redacted"
+         }
+        ],
+        "FulfillLineEffBPrescription__DetailsprivateVO": [
+         {
+          "ContextCode": "redacted",
+          "qcFail": "redacted"
+         }
+        ],
+        "FulfillLineEffBLMS__DetailsprivateVO": [
+         {
+          "ContextCode": "redacted",
+          "TrayId": null,
+          "SupplierId": null,
+          "SupplierSiteId": null,
+          "fulfillmentRequestId": "redacted",
+          "poSource": null
+         }
+        ]
+       }
+      ],
+      "RequestedShipDate": "1970-01-01T00:00:00Z"
+     }
+    ],
+    "additionalInformation": [
+     {
+      "Category": "redacted",
+      "HeaderEffBCustomer__Ship_2DToprivateVO": [
+       {
+        "ContextCode": "redacted",
+        "id": "redacted",
+        "firstName": "redacted",
+        "lastName": "redacted",
+        "middleName": null,
+        "company": null,
+        "countryCode": "redacted",
+        "streetAddress": "redacted",
+        "locality": "redacted",
+        "postalCode": "redacted",
+        "region": "redacted",
+        "telephone": "redacted",
+        "fax": null,
+        "extendedAddress": null,
+        "validated": "redacted",
+        "facilityId": null,
+        "residential": "redacted"
+       }
+      ],
+      "HeaderEffBCustomerprivateVO": [
+       {
+        "ContextCode": "redacted",
+        "id": "redacted",
+        "firstName": "redacted",
+        "lastName": "redacted",
+        "email": "redacted@example.com",
+        "telephone": "redacted",
+        "origin": "redacted"
+       }
+      ],
+      "HeaderEffBCustomer__Billing__AddressprivateVO": [
+       {
+        "ContextCode": "redacted",
+        "id": "redacted",
+        "firstName": "redacted",
+        "lastName": "redacted",
+        "middleName": null,
+        "company": null,
+        "countryCode": "redacted",
+        "streetAddress": "redacted",
+        "locality": "redacted",
+        "postalCode": "redacted",
+        "region": "redacted",
+        "telephone": "redacted",
+        "fax": null,
+        "extendedAddress": null,
+        "validated": "redacted",
+        "facilityId": null,
+        "residential": "redacted"
+       }
+      ],
+      "HeaderEffBRevenue_5FManagement_5FInformation_5FHeaderprivateVO": [
+       {
+        "ContextCode": "redacted",
+        "channel": "redacted"
+       }
+      ],
+      "HeaderEffBPreOrder__InformationprivateVO": [
+       {
+        "ContextCode": "redacted",
+        "preOrder": "redacted"
+       }
+      ]
+     }
+    ]
+   }
+  }
+ },
+ "response": {
+  "metadata": {
+   "action": "create",
+   "direction": "incoming",
+   "order_id": "redacted",
+   "work_unit_id": "0FAKE000000000000000000001"
+  },
+  "document": {
+   "status_code": 201,
+   "headers": {
+    "date": "redacted",
+    "content-type": "redacted",
+    "content-length": "redacted"
+   },
+   "body": {
+    "HeaderId": 0,
+    "OrderNumber": "redacted",
+    "OrderKey": "redacted",
+    "SourceTransactionNumber": "redacted",
+    "SourceTransactionSystem": "redacted",
+    "SourceTransactionId": "redacted",
+    "SourceTransactionRevisionNumber": 0,
+    "BusinessUnitId": 0,
+    "BusinessUnitName": "redacted",
+    "BuyingPartyId": 0,
+    "BuyingPartyNumber": "redacted",
+    "BuyingPartyName": "redacted",
+    "CustomerPONumber": null,
+    "TransactionTypeCode": "redacted",
+    "TransactionType": "redacted",
+    "SalesChannelCode": "redacted",
+    "TransactionalCurrencyCode": "redacted",
+    "PaymentTerms": "redacted",
+    "RequestingBusinessUnitId": 0,
+    "SubmittedFlag": false,
+    "FreezePriceFlag": false,
+    "FreezeShippingChargeFlag": false,
+    "FreezeTaxFlag": false,
+    "OnHoldFlag": false,
+    "CanceledFlag": false,
+    "OpenFlag": false,
+    "StatusCode": "redacted",
+    "Status": "redacted",
+    "CreationDate": "1970-01-01T00:00:00Z",
+    "LastUpdateDate": "1970-01-01T00:00:00Z",
+    "SubmittedDate": "1970-01-01T00:00:00Z",
+    "CreatedBy": "redacted",
+    "LastUpdatedBy": "redacted",
+    "MessageText": null,
+    "billToCustomer": [
+     {
+      "CustomerAccountId": 0,
+      "SiteUseId": 0,
+      "links": [
+       {
+        "rel": "redacted",
+        "href": "https://example.com/",
+        "name": "redacted",
+        "kind": "redacted",
+        "properties": {
+         "changeIndicator": "redacted"
+        }
+       }
+      ]
+     }
+    ],
+    "shipToCustomer": [
+     {
+      "PartyId": 0,
+      "SiteId": 0,
+      "links": [
+       {
+        "rel": "redacted",
+        "href": "https://example.com/",
+        "name": "redacted",
+        "kind": "redacted",
+        "properties": {
+         "changeIndicator": "redacted"
+        }
+       }
+      ]
+     }
+    ],
+    "lines": [
+     {
+      "HeaderId": 0,
+      "LineId": 0,
+      "FulfillLineId": 0,
+      "FulfillLineNumber": "redacted",
+      "LineNumber": 0,
+      "SourceTransactionLineId": "redacted",
+      "SourceTransactionLineNumber": "redacted",
+      "SourceTransactionScheduleId": "redacted",
+      "SourceScheduleNumber": "redacted",
+      "ProductNumber": "redacted",
+      "ProductId": 0,
+      "OrderedQuantity": 0.0,
+      "OrderedUOMCode": "redacted",
+      "TransactionLineTypeCode": "redacted",
+      "RequestedFulfillmentOrganizationCode": "redacted",
+      "StatusCode": "redacted",
+      "Status": "redacted",
+      "OnHoldFlag": false,
+      "CanceledFlag": false,
+      "RequestedShipDate": "1970-01-01T00:00:00Z",
+      "UnitListPrice": 0.0,
+      "UnitSellingPrice": 0.0,
+      "ExtendedAmount": 0.0,
+      "CreationDate": "1970-01-01T00:00:00Z",
+      "LastUpdateDate": "1970-01-01T00:00:00Z",
+      "charges": [
+       {
+        "OrderChargeId": 0,
+        "SourceChargeId": "redacted",
+        "PriceTypeCode": "redacted",
+        "ChargeTypeCode": "redacted",
+        "ChargeSubtypeCode": "redacted",
+        "ChargeDefinitionCode": "redacted",
+        "ChargeCurrencyCode": "redacted",
+        "PricedQuantity": 0.0,
+        "PricedQuantityUOMCode": "redacted",
+        "ApplyToCode": "redacted",
+        "SequenceNumber": 0,
+        "RollupFlag": false,
+        "CanAdjustFlag": false,
+        "PrimaryFlag": false,
+        "links": [
+         {
+          "rel": "redacted",
+          "href": "https://example.com/",
+          "name": "redacted",
+          "kind": "redacted",
+          "properties": {
+           "changeIndicator": "redacted"
+          }
+         }
+        ]
+       }
+      ],
+      "links": [
+       {
+        "rel": "redacted",
+        "href": "https://example.com/",
+        "name": "redacted",
+        "kind": "redacted",
+        "properties": {
+         "changeIndicator": "redacted"
+        }
+       }
+      ]
+     }
+    ],
+    "links": [
+     {
+      "rel": "redacted",
+      "href": "https://example.com/",
+      "name": "redacted",
+      "kind": "redacted",
+      "properties": {
+       "changeIndicator": "redacted"
+      }
+     }
+    ]
+   }
+  }
+ }
+}
