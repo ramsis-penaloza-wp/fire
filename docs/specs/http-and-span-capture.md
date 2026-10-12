@@ -287,16 +287,17 @@ running then is cut: `502` with `x-fire-proxy: upstream-aborted` if nothing was 
 
 ```yaml
 sources:
-  - {id: omg-api, kind: http_proxy, listen_port: 8021, upstream_env: OMG_API_UPSTREAM}
-  - {id: omg-validation, kind: http_proxy, listen_port: 8031,
+  - {id: omg-api, kind: http_proxy, listen_port: 8120, upstream_env: OMG_API_UPSTREAM}
+  - {id: omg-validation, kind: http_proxy, listen_port: 8130,
      upstream_env: OMG_VALIDATION_UPSTREAM}
 ```
 
 Locally the upstreams are `http://localhost:8020` and `http://localhost:8030`
-(`item-rx-validation-service`); both variables go in `.env.example`. Both services serve
-FastAPI's default `/openapi.json` (OpenAPI 3.0.2). `install_omg_schema`
-(`apps/order_management_api/src/openapi.py`) renames component schemas and leaves `paths` as
-FastAPI builds them.
+(`item-rx-validation-service`); both variables go in `.env.example`. Each proxy listens on its
+upstream's port plus 100, not plus 1: macOS's launchd can hold `localhost:8021` for
+`com.apple.ftp-proxy`. Both services serve FastAPI's default `/openapi.json` (OpenAPI 3.0.2).
+`install_omg_schema` (`apps/order_management_api/src/openapi.py`) renames component schemas and
+leaves `paths` as FastAPI builds them.
 
 ### Route templates
 

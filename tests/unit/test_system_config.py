@@ -420,8 +420,8 @@ def test_omg_proxies_sit_in_front_of_the_api_and_the_validation_engine() -> None
         if isinstance(source, HttpProxySourceConfig)
     }
     assert proxies == {
-        "omg-api": (8021, "OMG_API_UPSTREAM"),
-        "omg-validation": (8031, "OMG_VALIDATION_UPSTREAM"),
+        "omg-api": (8120, "OMG_API_UPSTREAM"),
+        "omg-validation": (8130, "OMG_VALIDATION_UPSTREAM"),
     }
 
 
