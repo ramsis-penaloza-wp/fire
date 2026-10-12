@@ -260,10 +260,9 @@ async def test_proxy_canary(
     canary: Canary,
     caplog: pytest.LogCaptureFixture,
     capfd: pytest.CaptureFixture[str],
+    quiet_httpx: None,
 ) -> None:
     caplog.set_level(logging.DEBUG)
-    # The test's own client logs each URL it calls; the tentacle's CLI sets httpx to WARNING.
-    caplog.set_level(logging.WARNING, logger="httpx")
     orders = [canary.plant(_fixture()) for _ in range(3)]
     async with httpx.AsyncClient(base_url=stack.proxy, trust_env=False) as client:
         for order in orders:

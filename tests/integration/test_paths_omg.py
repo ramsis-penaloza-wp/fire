@@ -207,10 +207,9 @@ def _find(spans: list[dict[str, Any]], **fields: Any) -> dict[str, Any] | None:
 
 
 async def test_a_place_order_shows_in_paths_across_the_listeners_link(
-    stack: Stack, canary: Canary, caplog: pytest.LogCaptureFixture
+    stack: Stack, canary: Canary, caplog: pytest.LogCaptureFixture, quiet_httpx: None
 ) -> None:
     caplog.set_level(logging.DEBUG)
-    caplog.set_level(logging.WARNING, logger="httpx")
     await _place_order(stack.proxy, canary)
     await _until(
         "the order's request shape",
