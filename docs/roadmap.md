@@ -4,7 +4,7 @@ The order of work for [ingest-drift-and-feedback.md](specs/ingest-drift-and-feed
 (the spec). The spec says what each part must do. This roadmap cuts it into steps, one pull
 request each, and says for every step what must work, how it is tested, and against what.
 
-Phase 0 is done (repo rules and `config/systems/omg.yml`), and so are steps 1.1 to 1.6, 1.9,
+Phase 0 is done (repo rules and `config/systems/omg.yml`), and so are steps 1.1 to 1.7, 1.9,
 and 2.1 to 2.4. Phases 1 to 4 keep the spec's numbering.
 
 **Scope added here.** The tentacle intercepts everything that enters and leaves OMG, not only
@@ -283,7 +283,7 @@ among the spans the tentacle sends.
 
 **Delivers:**
 
-- `S3CaptureRecordSource`: reads pairs from OMG's transmission bucket (localstack locally),
+- `S3CaptureSource`: reads pairs from OMG's transmission bucket (localstack locally),
   for example `requests/{work_unit_id}/{action}_{ts}.json` with the matching response.
 - Channel name `{label}:{action}`, outbound. The request part has no status class; the
   response part takes the captured response's status class. `work_id` comes from the key.
@@ -300,6 +300,22 @@ among the spans the tentacle sends.
   channel with status class `none`.
 
 **Test.** L1 with capture files in the bucket layout. L2 against localstack.
+
+**Shipped**, except its L2 run. `S3CaptureSource` yields pairs, not records, so `CapturePipeline`
+shapes them instead of the record pipeline. The OTLP receiver's `capture_event` fills one
+`CaptureIndex` per tentacle, so a pair carries the ids of the span whose `transmission.capture`
+named it and the work unit of its key. The pair id gained the label, and `index/` markers are
+never listed, so `skipped: index_marker` is gone. Helios is the L2 partner, since every fresh
+order makes sf-publisher write a pair. `make test-oracle-publisher` writes none for a fresh order,
+because `order.item_validation_completed` skips orders Oracle does not hold, and
+`fulfillment.dispatch.execute.oracle` would create an order in Oracle's dev environment, so no
+synthetic `WorkUnit` ships. The `helios/` L1 fixtures are recorded; `oracle-om/` and `insurance/`
+are derived from OMG's client models. The L1 test gives step 1.9's work index real data: the
+recorded place-order flow's capture event joins a Helios pair to `sf-publisher.business_logic`,
+and a redelivery and a `WorkUnit` that carry the work unit alone reach the same flow; without the
+event all five shapes stay unattached. The L2 test,
+`tests/integration/test_tentacle_capture_omg.py`, is written and waits on the VPN: without it OMG
+answers every place order `502`, since tax codes come from payment-services staging.
 
 ### 1.8 Event sources
 
@@ -526,7 +542,10 @@ observed. Contract drift stays optional.
 
 **Inbound part run.** The L2 inbound bullet passes with what 1.6, 2.1, 2.2, and 2.4 shipped:
 [e. Drift demo](../dev/omg/README.md#e-drift-demo-step-26) has the commands and the
-notification. The L1 outbound bullet waits on 1.7. The L1 path bullet's behavior is step 2.3's
+notification. The L1 outbound bullet's source shipped with 1.7, and its fixture can start from
+`tests/fixtures/omg/captures/oracle-om/001.json`, derived from OMG's client models since no local
+target writes Oracle captures; its corpus and replay command are still this step's. The L1 path
+bullet's behavior is step 2.3's
 L1 test (`tests/integration/test_place_order_paths.py`); its corpus and replay command are still
 this step's.
 

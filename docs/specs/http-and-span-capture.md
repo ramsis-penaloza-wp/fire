@@ -9,12 +9,11 @@ tentacle, so no payload, URL, or header leaves it. Models are in
 [tentacle.md](tentacle.md); flows in [flows-and-paths.md](flows-and-paths.md). OMG is the
 example.
 
-**Status:** the contract of the shipped code, except [Capture events](#capture-events), a
-proposal for step 1.7. [OTLP receiver](#otlp-receiver), [Span mapping](#span-mapping), and
-[Bodies on client spans](#bodies-on-client-spans) are step 1.4;
-[Operation names](#operation-names) is step 1.5; [Inbound proxy](#inbound-proxy) is step 1.6,
-which also shipped the template rules of [Per-host templates](#per-host-templates) as the proxy
-applies them to OpenAPI templates.
+**Status:** the contract of the shipped code. [OTLP receiver](#otlp-receiver),
+[Span mapping](#span-mapping), and [Bodies on client spans](#bodies-on-client-spans) are step
+1.4; [Operation names](#operation-names) is step 1.5; [Inbound proxy](#inbound-proxy) is step
+1.6, which also shipped the template rules of [Per-host templates](#per-host-templates) as the
+proxy applies them to OpenAPI templates; [Capture events](#capture-events) is step 1.7.
 
 ## OTLP receiver
 
@@ -49,12 +48,13 @@ service:
 | `fire/core/services/span_pipeline.py` | `SpanPipeline`, `SpanOutcome`, and its reason codes |
 | `fire/core/domain/operation.py` | `OperationNamer`, `OperationInputs`, the id rules, and `OperationRules` |
 | `fire/apps/tentacle/sources.py` | `open_otlp_receiver`: checks the listen address and binds it |
-| `fire/apps/tentacle/runner.py` | `PlannedReceiver`, and the sink that maps each batch and queues it |
+| `fire/apps/tentacle/runner.py` | `PlannedReceiver`, and the sink that maps each batch, queues it, and indexes its capture events |
 
 | Key | Required | Meaning |
 |-----|----------|---------|
 | `id`, `kind` | yes | Common keys ([tentacle.md](tentacle.md)); `kind: otlp`. No `direction` or `envelope` |
 | `listen_env` | yes | Env var holding the listen address, `host:port`; an IPv6 host goes in brackets |
+| `capture_event` | no | The span event that names a transmission capture, see [Capture events](#capture-events) |
 
 ```yaml
 sources:
@@ -99,6 +99,7 @@ Counted on the source's [counters line](tentacle.md#sending-to-the-body). `read`
 | `rejected:` a reason of [Span mapping](#span-mapping) | A span not sent |
 | `skipped:` a reason of [Bodies on client spans](#bodies-on-client-spans) | A body not shaped; `sampled_out` once per span |
 | `noted: operation_unlisted`, `invalid_link` | Counted; the span is sent |
+| `noted: capture_indexed` | One per URI the span's [capture events](#capture-events) put in the index |
 | `noted: buffer_full` | A batch answered `503`; the collector resends it |
 | `noted: unsupported_media_type`, `malformed_request`, `request_too_large` | A request answered `415`, `400`, or `413`; the collector's log says how many spans it held |
 
@@ -178,8 +179,9 @@ every `http.request.header.*` and `http.response.header.*` (OMG's httpx hooks se
 `http.host`, `http.user_agent`, `url.query`, `net.*`, `aws.queue_url` and `messaging.url`
 (account ids), `aws.request_id`, `messaging.message_id`, `cloud.region`, `db.*`, other `aws.*`,
 OMG's `omg.*` (including `omg.work_unit.id`) and `lambda.*`, `exception` events, every other
-span event, `transmission.capture` included until step 1.7, and every resource attribute but
-`service.name`. For SNS, botocore 0.66b0 puts the full topic ARN, account id included, in both
+span event, and every resource attribute but `service.name`. A declared
+[capture event](#capture-events) has its two key attributes read into memory and every other
+attribute skipped; undeclared, it is skipped like any other event. For SNS, botocore 0.66b0 puts the full topic ARN, account id included, in both
 `messaging.destination` and `messaging.destination.name`; they are read for SQS only, where
 `messaging.destination` is the queue name.
 
@@ -219,30 +221,52 @@ because paths need every span.
 
 ### Capture events
 
-Proposal for step 1.7: the receiver does not index captures yet, and `capture_event` is not a
-key of the `otlp` source yet.
+A client that writes a transmission capture can name it in a span event. `capture_event` on the
+`otlp` source (`CaptureEvent`, `fire/core/domain/capture.py`) declares the event and its two key
+attributes, and the [`s3_capture`](tentacle.md#kinds) source of the same tentacle uses them to
+join each pair to its span.
 
-OMG's transmission captures (`adapters/src/clients/transmission_capture.py`) add the span event
-`transmission.capture` through `set_span_event`, which prefixes every attribute with `omg.`, so
-the keys are `omg.transmission.request_uri`, `omg.transmission.response_uri`, and
-`omg.transmission.status_code`. The URIs are S3 keys holding a `work_unit_id`, an action, and
-for some clients an order id; they never leave the tentacle. For OMG's response middlewares the
-event lands on the `CLIENT` span's parent: the `CLIENT` span has already ended
-(`httpx_hooks.py`, module docstring).
+| Key | Required | Meaning |
+|-----|----------|---------|
+| `name` | yes | The span event's name |
+| `request_uri`, `response_uri` | yes | The attributes holding the request's and the response's object key, as a key or an `s3://{bucket}/{key}` URI; two different keys |
+| `ttl_s` | no | Seconds a key stays indexed, default `900` |
 
 ```yaml
-capture_event:
-  name: transmission.capture
-  request_uri: omg.transmission.request_uri
-  response_uri: omg.transmission.response_uri
-  ttl_s: 900                                   # default
+  - id: omg-traces
+    kind: otlp
+    listen_env: OMG_OTLP_LISTEN
+    capture_event: {name: transmission.capture, request_uri: omg.transmission.request_uri,
+                    response_uri: omg.transmission.response_uri}
 ```
 
-The receiver maps each URI to the span's `trace_id` and `span_id` in memory for `ttl_s`.
-Proposed for step 1.7: the `s3_capture` source looks up each object it reads and, on a hit,
-sets both ids on its shapes, which then carry `work_id` and `trace_id` together for the work
-index of [flows-and-paths.md](flows-and-paths.md). The span observation carries nothing from
-the event.
+OMG's transmission captures (`adapters/src/clients/transmission_capture.py`) add the span event
+`transmission.capture` through `set_span_event`, which prefixes every attribute with `omg.`: its
+keys are `omg.transmission.request_uri`, `omg.transmission.response_uri`,
+`omg.transmission.status_code` (left out when no response came), `omg.environment`, and
+`service.name`. The URIs are `s3://{bucket}/{prefix}{requests,responses}/{work_unit_id}/{stem}.json`,
+whose stem can hold an order id. The event is added before the objects are written.
+
+- `parse_traces` reads, of each event with that name, only the two declared attributes, as
+  non-empty strings, into `RawSpan.capture_uris` (request then response, per event, in event
+  order), which `repr` leaves out. Every other attribute of the event is skipped unread.
+- For each span of a batch it takes that gives a span observation (a rejected span indexes
+  nothing), the runner maps the object key of each URI (`s3://{bucket}/` removed; a URI with no
+  key is skipped) to the span's `trace_id` and `span_id` in the tentacle's `CaptureIndex` for
+  `ttl_s`, and counts `noted: capture_indexed` per URI indexed. The index holds at most 100 000
+  keys, dropping the oldest, and one index serves every source of the tentacle.
+- The `s3_capture` source looks up each pair's response key, then its request key, when it
+  reads the pair, `settle_s` after the response landed; on a hit both shapes carry the span's
+  ids, and so carry `work_id` and `trace_id` together for the work index of
+  [flows-and-paths.md](flows-and-paths.md#shapes-on-flows). A miss leaves the shapes with
+  `work_id` alone.
+- Nothing of a URI reaches an observation, a count, or a log line, and the span observation
+  carries nothing from the event.
+
+For OMG's response middlewares the event lands on the `CLIENT` span's parent, because the
+`CLIENT` span has already ended (`httpx_hooks.py`, module docstring), so a capture's shapes
+attach to the processor's span: `sf-publisher.business_logic` for the Helios call of the
+place-order flow (open question 4).
 
 ## Operation names
 
@@ -601,8 +625,11 @@ L3 waits on open questions 1 and 2.
    hostname through the proxy, or FIRE posts OMG's payloads itself; step 1.10 assumes the
    first.
 4. Which call a capture belongs to: OMG records `transmission.capture` on the `CLIENT` span's
-   parent, so a processor span with several partner calls holds several captures. The recorded
-   flow shows it: the event is on `sf-publisher.business_logic`, not on the Helios `POST`.
+   parent, so a processor span with several partner calls holds several captures, and their
+   shapes attach to the parent's node, not to the call's. The recorded flow shows it: the event
+   is on `sf-publisher.business_logic`, not on the Helios `POST`. The captured request's
+   `traceparent` header names the `CLIENT` span ([tentacle.md](tentacle.md#open-questions),
+   question 8).
 5. Whether the receiver and the proxy need a token once they listen beyond the loopback. On
    Linux the receiver listens on `0.0.0.0:4318`, reachable from the local network.
 6. `make test-order` always posts the same order, so after its first run OMG answers from its
