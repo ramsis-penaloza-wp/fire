@@ -4,9 +4,9 @@ The order of work for [ingest-drift-and-feedback.md](specs/ingest-drift-and-feed
 (the spec). The spec says what each part must do. This roadmap cuts it into steps, one pull
 request each, and says for every step what must work, how it is tested, and against what.
 
-Phase 0 is done (repo rules and `config/systems/omg.yml`), and so are steps 1.1, 1.2, 1.3,
-1.6, 2.1, 2.2, and 2.4 for shape drift; its path drift parts land with steps 1.9 and 2.3.
-Phases 1 to 4 keep the spec's numbering.
+Phase 0 is done (repo rules and `config/systems/omg.yml`), and so are steps 1.1 to 1.6, 2.1,
+2.2, and 2.4 for shape drift; its path drift parts land with steps 1.9 and 2.3. Phases 1 to 4
+keep the spec's numbering.
 
 **Scope added here.** The tentacle intercepts everything that enters and leaves OMG, not only
 Kinesis domain events: inbound HTTP, inbound external events, internal domain events, outbound
@@ -66,14 +66,16 @@ shapes. Inbound shapes need requests posted through the proxy (step 1.6).
 | Internal | Domain events | The DynamoDB stream of `order_domain_events` (every event) and the `domain_events` Kinesis stream (86 of 125 events) | Event shapes, `work_unit_id` | Full |
 | Outbound | Partner calls from processors | S3 transmission captures: Helios, Monocle, Notification, Oracle OM, Order Services, Narvar, Insurance | Request and response shapes per partner action, `work_unit_id` | Full |
 | Outbound | Every partner call as a `CLIENT` span | OTLP | Host, method, path, status, trace | Only for clients that opt in (Oracle OM, Order Services, CTO), cut at 4032 bytes |
-| Outbound | AWS calls (DynamoDB, SNS, SQS, S3) as `CLIENT` spans | OTLP | Service, operation, resource, status, trace | None |
+| Outbound | AWS calls (DynamoDB, SQS, S3) as `CLIENT` spans, SNS `Publish` as `PRODUCER` spans | OTLP | Service, operation, resource, status, trace | None |
 
 These joins make the trace logic possible:
 
 - The proxy adds a W3C `traceparent` header to each request it forwards. OMG's `SERVER` span
   continues that trace, so the request's shape joins its trace.
-- OMG's listener links its span to the span that wrote the event (`writer_traceparent`), so a
-  flow continues across the async boundary from the API to the processors.
+- OMG's listener starts a new trace whose root span links to the API's `SERVER` span that wrote
+  the event (`writer_traceparent`), so a flow continues across the async boundary from the API
+  to the processors. The listener's SNS `Publish` and the processors it feeds are in that
+  second trace.
 - A transmission capture adds a `transmission.capture` event to the active span with the S3
   keys of the pair, so a captured body joins its span.
 - `work_unit_id` joins domain events, captures, and outbox rows.
@@ -180,7 +182,8 @@ fixtures; with `OMG_REPO` set, the test also reads them from OMG. Canary.
 ### 1.4 OTLP receiver
 
 **Spec.** [OTLP receiver](specs/http-and-span-capture.md#otlp-receiver) and
-[Span mapping](specs/http-and-span-capture.md#span-mapping) (source kind `otlp`), and
+[Span mapping](specs/http-and-span-capture.md#span-mapping) (source kind `otlp` with
+`listen_env`), and
 [a. Start OMG with FIRE's override](../dev/omg/README.md#a-start-omg-with-fires-override-step-14).
 
 **Delivers:**
@@ -188,24 +191,36 @@ fixtures; with `OMG_REPO` set, the test also reads them from OMG. Canary.
 - An OTLP/HTTP JSON receiver in the tentacle (`/v1/traces`). OMG's collector sends JSON
   (`encoding: json`), so FIRE needs no protobuf dependency.
 - `dev/omg/`: a compose override that mounts a collector config with one more exporter
-  (`otlphttp` to the tentacle), and a README with the commands.
+  (`otlp_http` to the tentacle), a script that records the collector's exports as scrubbed L1
+  fixtures, and a README with the commands.
 - Spans become `SpanObservation`s through an attribute allowlist: route, method, status,
-  service, `rpc.*`, and table or topic names. Everything else is dropped, including
-  `url.full`, headers, and `http.*.body`.
+  service, `rpc.*`, and table or topic names. Everything else is dropped, including headers;
+  `url.full` is read in memory for the host and path only.
 - A complete JSON body on a `CLIENT` span (the request body attribute, or the response body
   span event) becomes a `ShapeObservation` for that outbound channel. A truncated body
   (`...[truncated`) is counted, not generalized.
+- The sender posts spans next to shapes, and the L2 check of the proxy's join moves from
+  Jaeger into FIRE.
 
 **Done when:**
 
-- At L2, `make test-order` delivers to the tentacle the `SERVER` span of
-  `POST /v1/orders/place_order` and its child DynamoDB and SNS spans, all with one
-  `trace_id`.
+- At L2, a place order delivers to the tentacle the `SERVER` span of
+  `POST /v1/orders/place_order` and its child DynamoDB spans, all with one `trace_id`, and the
+  listener's span, which starts another trace and links to that `SERVER` span, with its SNS
+  `producer` span.
 - A canary planted in the order payload appears in no observation.
 - Jaeger still receives every trace: FIRE's exporter is added, not substituted.
 
-**Test.** L0 for the allowlist and truncation. L1 with OTLP JSON recorded from
-`make test-order`. L2 live.
+**Test.** L0 for the allowlist and truncation. L1 with OTLP JSON recorded from the place-order
+flow. L2 live.
+
+**Shipped.** The receiver's address is `listen_env` (`OMG_OTLP_LISTEN`), not `listen_port`: an
+unset variable skips the source, as for every kind, and the address differs per machine
+(`0.0.0.0:4318` on Linux). The SNS publish is in the listener's trace, not the API's: the first
+version of the Done when above put it among the `SERVER` span's children. `make test-order`
+repeats one order, so after its first run OMG answers from its idempotency record and starts no
+listener; the recordings and the L2 test post the same payload with fresh ids, as
+`scripts/call_order_api.py` does. `capture_event` moves to step 1.7, which reads the index.
 
 ### 1.5 Operation names
 
@@ -225,6 +240,10 @@ fixtures; with `OMG_REPO` set, the test also reads them from OMG. Canary.
 - Every operation name passes the canary test.
 
 **Test.** L0 table from raw paths to names. L1 stability across two recordings.
+
+**Shipped** with step 1.4, whose recordings its L1 test needs. The two place-order recordings
+give the same 26 operations. Methods follow OMG's 0.66b0 instrumentors, which keep ten, `QUERY`
+included.
 
 ### 1.6 Inbound proxy
 
@@ -253,9 +272,10 @@ fixtures; with `OMG_REPO` set, the test also reads them from OMG. Canary.
 payloads from `scripts/test_payloads/` through the proxy, as in
 [c. Generate traffic](../dev/omg/README.md#c-generate-traffic).
 
-**Shipped before 1.4.** With no OTLP receiver in FIRE yet, the L2 test checks the join in
-Jaeger: OMG's `SERVER` span is a child of the span id the shapes carry. Step 1.4 moves the
-check into FIRE.
+**Shipped before 1.4.** With no OTLP receiver in FIRE yet, the L2 test checked the join in
+Jaeger: OMG's `SERVER` span is a child of the span id the shapes carry. Step 1.4 moved the
+check into FIRE: the L2 test runs the receiver next to the proxy and finds the `SERVER` span
+among the spans the tentacle sends.
 
 ### 1.7 Transmission captures
 

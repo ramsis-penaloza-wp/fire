@@ -27,7 +27,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 import fire.apps.incident_engine.app as app_module
-from fire.adapters.sources.http_proxy import listen
+from fire.adapters.sources.listener import listen
 from fire.apps.incident_engine.app import app
 from fire.apps.incident_engine.wiring import build_container
 from fire.apps.tentacle.runner import EXIT_OK, prepare, run

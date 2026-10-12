@@ -13,9 +13,10 @@ import logging
 import os
 import re
 import signal
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Coroutine, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import httpx
 import yaml
@@ -25,6 +26,7 @@ from fire.adapters.shapes.sha256 import Sha256ShapeFingerprinter
 from fire.apps.config import (
     EventSourceConfig,
     HttpProxySourceConfig,
+    OtlpSourceConfig,
     SourceConfig,
     SystemConfig,
     TentacleConfig,
@@ -33,7 +35,13 @@ from fire.apps.config import (
 )
 from fire.apps.tentacle.counters import SourceCounters
 from fire.apps.tentacle.sender import Outgoing, Sender, settle
-from fire.apps.tentacle.sources import READERS, SourceUnavailable, open_http_proxy
+from fire.apps.tentacle.sources import (
+    READERS,
+    SourceUnavailable,
+    open_http_proxy,
+    open_otlp_receiver,
+)
+from fire.core.domain.operation import OperationNamer
 from fire.core.ports.exchange_source import (
     ExchangeNote,
     ExchangeSkipReason,
@@ -41,8 +49,10 @@ from fire.core.ports.exchange_source import (
     HttpExchange,
 )
 from fire.core.ports.record_source import RecordSource, StartPosition
+from fire.core.ports.span_source import RawSpan, SpanBatchResult, SpanRequestNote, SpanSource
 from fire.core.services.exchange_pipeline import ExchangePipeline, PartSkipped
 from fire.core.services.record_pipeline import RecordPipeline, Rejected, Skipped
+from fire.core.services.span_pipeline import SpanPipeline
 
 logger = logging.getLogger(__name__)
 
@@ -75,11 +85,21 @@ class PlannedProxy:
 
 
 @dataclass(frozen=True)
+class PlannedReceiver:
+    id: str
+    receiver: SpanSource
+    pipeline: SpanPipeline
+
+
+type Planned = PlannedSource | PlannedProxy | PlannedReceiver
+
+
+@dataclass(frozen=True)
 class Plan:
     """What a checked startup runs: the sources to read and where to send."""
 
     system: str
-    sources: list[PlannedSource | PlannedProxy]
+    sources: list[Planned]
     tentacle: TentacleConfig
     url: str
     token: str
@@ -121,7 +141,7 @@ def prepare(
         raise StartupError(f"system {system!r} declares no source {source!r} (declared: {known})")
     chosen = [declared[source]] if source is not None else list(declared.values())
 
-    planned: list[PlannedSource | PlannedProxy] = []
+    planned: list[Planned] = []
     try:
         for config in chosen:
             try:
@@ -134,6 +154,8 @@ def prepare(
         for opened in planned:
             if isinstance(opened, PlannedProxy):
                 opened.proxy.close()
+            elif isinstance(opened, PlannedReceiver):
+                opened.receiver.close()
         raise
     if not planned:
         raise StartupError(f"system {system!r} has no source to run")
@@ -175,10 +197,24 @@ def _open(
     system: SystemConfig,
     start: StartPosition,
     environ: Mapping[str, str],
-) -> PlannedSource | PlannedProxy:
+) -> Planned:
     location = environ.get(config.location_env)
     if not location:
         raise _Skip(f"{config.location_env} is not set")
+    if isinstance(config, OtlpSourceConfig):
+        try:
+            receiver = open_otlp_receiver(config, location)
+        except SourceUnavailable as error:
+            raise StartupError(f"source {config.id}: {error}") from None
+        spans = SpanPipeline(
+            system=system.system,
+            source=config.id,
+            sample_rate=system.fingerprinting.sample_rate,
+            namer=OperationNamer(system.operations),
+            generalizer=FlatStarShapeGeneralizer(),
+            fingerprinter=Sha256ShapeFingerprinter(),
+        )
+        return PlannedReceiver(id=config.id, receiver=receiver, pipeline=spans)
     if isinstance(config, HttpProxySourceConfig):
         try:
             proxy = open_http_proxy(config, location)
@@ -277,11 +313,7 @@ async def run(
         reporting = asyncio.create_task(_report(counters, counters_interval_s))
         stopping = asyncio.create_task(stop.wait())
         readers = [
-            asyncio.create_task(
-                _forward(planned, queue, counters[planned.id])
-                if isinstance(planned, PlannedProxy)
-                else _read(planned, queue, counters[planned.id])
-            )
+            asyncio.create_task(_run_source(planned, queue, counters[planned.id]))
             for planned in plan.sources
         ]
 
@@ -325,6 +357,16 @@ async def run(
     return EXIT_UNSENT if unsent or failed or sender_failed else EXIT_OK
 
 
+def _run_source(
+    planned: Planned, queue: asyncio.Queue[Outgoing | None], counters: SourceCounters
+) -> Coroutine[Any, Any, bool]:
+    if isinstance(planned, PlannedProxy):
+        return _forward(planned, queue, counters)
+    if isinstance(planned, PlannedReceiver):
+        return _receive(planned, queue, counters)
+    return _read(planned, queue, counters)
+
+
 async def _read(
     planned: PlannedSource, queue: asyncio.Queue[Outgoing | None], counters: SourceCounters
 ) -> bool:
@@ -355,6 +397,18 @@ async def _forward(
     """Serves one proxy until its task is cancelled; False when it failed."""
     try:
         await planned.proxy.serve(_ExchangeCounter(planned.pipeline, queue, counters))
+    except Exception as error:
+        logger.error("source failed: source=%s error=%s", planned.id, type(error).__name__)
+        return False
+    return True
+
+
+async def _receive(
+    planned: PlannedReceiver, queue: asyncio.Queue[Outgoing | None], counters: SourceCounters
+) -> bool:
+    """Serves one receiver until its task is cancelled; False when it failed."""
+    try:
+        await planned.receiver.serve(_SpanCounter(planned.pipeline, queue, counters))
     except Exception as error:
         logger.error("source failed: source=%s error=%s", planned.id, type(error).__name__)
         return False
@@ -400,6 +454,46 @@ class _ExchangeCounter:
         self._counters.skipped[reason] += 1
 
     def note(self, reason: ExchangeNote) -> None:
+        self._counters.noted[reason] += 1
+
+
+class _SpanCounter:
+    """The sink a receiver reports to: it maps each request's spans and queues what they built.
+
+    A batch is taken whole or not at all: when its observations do not all fit the queue,
+    nothing is counted or queued, `buffer_full` is noted, and the receiver asks the sender to
+    retry, so the collector's queue holds the spans. A span counts as one `read`.
+    """
+
+    def __init__(
+        self,
+        pipeline: SpanPipeline,
+        queue: asyncio.Queue[Outgoing | None],
+        counters: SourceCounters,
+    ) -> None:
+        self._pipeline = pipeline
+        self._queue = queue
+        self._counters = counters
+
+    def spans(self, spans: Sequence[RawSpan]) -> SpanBatchResult:
+        outcomes = [self._pipeline.process(span) for span in spans]
+        observations = [item for outcome in outcomes for item in outcome.observations]
+        if len(observations) > self._queue.maxsize - self._queue.qsize():
+            self._counters.noted["buffer_full"] += 1
+            return SpanBatchResult(taken=False)
+        for observation in observations:
+            self._queue.put_nowait(Outgoing(observation, _nothing_to_ack))
+        self._counters.read += len(spans)
+        self._counters.built += len(observations)
+        for outcome in outcomes:
+            if outcome.rejected is not None:
+                self._counters.rejected[outcome.rejected] += 1
+            self._counters.skipped.update(outcome.skipped)
+            self._counters.noted.update(outcome.noted)
+        rejected = sum(1 for outcome in outcomes if outcome.rejected is not None)
+        return SpanBatchResult(taken=True, rejected=rejected)
+
+    def note(self, reason: SpanRequestNote) -> None:
         self._counters.noted[reason] += 1
 
 

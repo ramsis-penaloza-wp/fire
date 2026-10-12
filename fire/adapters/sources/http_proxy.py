@@ -13,21 +13,24 @@ import asyncio
 import contextlib
 import json
 import logging
-import math
 import re
 import secrets
 import socket
-from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
+from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Any
 
 import httpcore
 import httpx
-import uvicorn
-from uvicorn.protocols.http.h11_impl import H11Protocol
 
 from fire.adapters.manifests.openapi import OpenApiRoutes, openapi_routes
+from fire.adapters.sources.listener import (
+    Receive,
+    Scope,
+    Send,
+    quiet_server,
+    serve_until_cancelled,
+)
 from fire.core.domain.route_template import RouteTable
 from fire.core.ports.exchange_source import (
     ExchangeNote,
@@ -38,14 +41,9 @@ from fire.core.ports.exchange_source import (
 )
 
 type Headers = list[tuple[bytes, bytes]]
-type Scope = dict[str, Any]
-type Message = dict[str, Any]
-type Receive = Callable[[], Awaitable[Message]]
-type Send = Callable[[Message], Awaitable[None]]
 
 logger = logging.getLogger(__name__)
 
-BACKLOG = 2048
 OPENAPI_TIMEOUT_S = 10.0
 # Below uvicorn's default 5 s keep-alive: the pool drops an idle connection before such an
 # upstream closes it under a request.
@@ -68,12 +66,6 @@ _TRACEPARENT = re.compile(r"([0-9a-f]{2})-([0-9a-f]{32})-([0-9a-f]{16})-([0-9a-f
 _DEFAULT_PORTS = {"http": 80, "https": 443}
 _UNREACHABLE: Headers = [(b"content-length", b"0"), (b"x-fire-proxy", b"upstream-unreachable")]
 _ABORTED: Headers = [(b"content-length", b"0"), (b"x-fire-proxy", b"upstream-aborted")]
-
-
-def listen(host: str, port: int) -> socket.socket:
-    """A bound TCP socket listening on host:port; port 0 picks a free one. Raises OSError."""
-    family = socket.AF_INET6 if ":" in host else socket.AF_INET
-    return socket.create_server((host, port), family=family, backlog=BACKLOG)
 
 
 class HttpProxy:
@@ -130,38 +122,14 @@ class HttpProxy:
             if scope["type"] == "http":
                 await self._guarded(scope, receive, send, sink)
 
-        config = uvicorn.Config(
-            app,
-            interface="asgi3",
-            http=_H11Protocol,
-            ws="none",
-            lifespan="off",
-            access_log=False,
-            log_config=None,
-            server_header=False,
-            date_header=False,
-            proxy_headers=False,
-            timeout_graceful_shutdown=math.ceil(self._shutdown_s),
-        )
-        config.load()
-        # At TRACE level uvicorn wraps the app in a logger that writes every scope, path,
-        # query, and headers included.
-        config.loaded_app = app
-        server = _Server(config)
-        serving = asyncio.create_task(server.serve(sockets=[self._sock]))
+        server = quiet_server(app, shutdown_s=self._shutdown_s)
         templates = asyncio.create_task(self._keep_templates(sink))
         try:
-            await asyncio.wait({serving})
-        except asyncio.CancelledError:
-            server.should_exit = True
-            await asyncio.wait({serving})
-            raise
+            await serve_until_cancelled(server, self._sock)
         finally:
-            serving.cancel()
             templates.cancel()
             await asyncio.wait({templates})
             await self._pool.aclose()
-        serving.result()
 
     def close(self) -> None:
         """Closes the listening socket, for a proxy whose `serve` never ran."""
@@ -375,24 +343,6 @@ class HttpProxy:
             logger.warning(
                 "shaping failed: source=%s error=%s", self._source, type(error).__name__
             )
-
-
-class _Server(uvicorn.Server):
-    """uvicorn, leaving SIGINT and SIGTERM to the tentacle."""
-
-    @contextlib.contextmanager
-    def capture_signals(self) -> Iterator[None]:
-        yield
-
-
-class _H11Protocol(H11Protocol):
-    """uvicorn's h11 protocol without its access log, which writes each path and query. uvicorn
-    turns it on per connection whenever `uvicorn.access` has a handler, `access_log=False` or not.
-    """
-
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
-        super().__init__(*args, **kwargs)
-        self.access_log = False
 
 
 class _ClientGone(Exception):

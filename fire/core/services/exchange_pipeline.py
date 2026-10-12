@@ -27,13 +27,6 @@ from fire.core.ports.shape_fingerprinter import ShapeFingerprinter
 from fire.core.ports.shape_generalizer import ShapeGeneralizer
 from fire.core.services.record_pipeline import sampled_in
 
-_STATUS_CLASSES = {
-    2: StatusClass.SUCCESS,
-    3: StatusClass.REDIRECTION,
-    4: StatusClass.CLIENT_ERROR,
-    5: StatusClass.SERVER_ERROR,
-}
-
 _GZIP_WBITS = zlib.MAX_WBITS | 16
 _ZLIB_WBITS = zlib.MAX_WBITS
 _RAW_DEFLATE_WBITS = -zlib.MAX_WBITS
@@ -149,9 +142,10 @@ class ExchangePipeline:
 
 
 def _status_class(status_code: int) -> StatusClass:
-    if not 200 <= status_code <= 599:
+    status_class = StatusClass.of(status_code)
+    if status_class is None:
         raise _Skip(PartSkipReason.STATUS_UNCLASSIFIED)
-    return _STATUS_CLASSES[status_code // 100]
+    return status_class
 
 
 def _json_body(message: HttpMessage, limit: int) -> Any:

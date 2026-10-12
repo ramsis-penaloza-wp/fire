@@ -1,0 +1,1126 @@
+{
+ "resourceSpans": [
+  {
+   "resource": {
+    "attributes": [
+     {
+      "key": "service.name",
+      "value": {
+       "stringValue": "order-management-gateway-sf-publisher"
+      }
+     },
+     {
+      "key": "service.version",
+      "value": {
+       "stringValue": "redacted"
+      }
+     },
+     {
+      "key": "service.environment",
+      "value": {
+       "stringValue": "redacted"
+      }
+     }
+    ]
+   },
+   "scopeSpans": [
+    {
+     "scope": {
+      "name": "opentelemetry.instrumentation.botocore.dynamodb",
+      "version": "0.66b0"
+     },
+     "spans": [
+      {
+       "traceId": "3c7003978df556a6e7d729d90c5be5a7",
+       "spanId": "b0232b20a65238df",
+       "parentSpanId": "8c394b3cd83bd771",
+       "flags": 256,
+       "name": "DynamoDB.GetItem",
+       "kind": 3,
+       "startTimeUnixNano": "1791768819315457266",
+       "endTimeUnixNano": "1791768819321147642",
+       "attributes": [
+        {
+         "key": "rpc.system",
+         "value": {
+          "stringValue": "aws-api"
+         }
+        },
+        {
+         "key": "rpc.service",
+         "value": {
+          "stringValue": "DynamoDB"
+         }
+        },
+        {
+         "key": "rpc.method",
+         "value": {
+          "stringValue": "GetItem"
+         }
+        },
+        {
+         "key": "cloud.region",
+         "value": {
+          "stringValue": "redacted"
+         }
+        },
+        {
+         "key": "server.address",
+         "value": {
+          "stringValue": "warby-localstack"
+         }
+        },
+        {
+         "key": "server.port",
+         "value": {
+          "intValue": "4566"
+         }
+        },
+        {
+         "key": "db.system",
+         "value": {
+          "stringValue": "redacted"
+         }
+        },
+        {
+         "key": "db.operation",
+         "value": {
+          "stringValue": "redacted"
+         }
+        },
+        {
+         "key": "net.peer.name",
+         "value": {
+          "stringValue": "redacted"
+         }
+        },
+        {
+         "key": "aws.dynamodb.table_names",
+         "value": {
+          "arrayValue": {
+           "values": [
+            {
+             "stringValue": "omg-outbox-dev"
+            }
+           ]
+          }
+         }
+        },
+        {
+         "key": "aws.request_id",
+         "value": {
+          "stringValue": "redacted"
+         }
+        },
+        {
+         "key": "retry_attempts",
+         "value": {
+          "intValue": "0"
+         }
+        },
+        {
+         "key": "http.status_code",
+         "value": {
+          "intValue": "200"
+         }
+        }
+       ],
+       "status": {}
+      },
+      {
+       "traceId": "3c7003978df556a6e7d729d90c5be5a7",
+       "spanId": "da63a08292176d07",
+       "parentSpanId": "1203f2175edf1b62",
+       "flags": 256,
+       "name": "DynamoDB.Query",
+       "kind": 3,
+       "startTimeUnixNano": "1791768819322522944",
+       "endTimeUnixNano": "1791768819337647848",
+       "attributes": [
+        {
+         "key": "rpc.system",
+         "value": {
+          "stringValue": "aws-api"
+         }
+        },
+        {
+         "key": "rpc.service",
+         "value": {
+          "stringValue": "DynamoDB"
+         }
+        },
+        {
+         "key": "rpc.method",
+         "value": {
+          "stringValue": "Query"
+         }
+        },
+        {
+         "key": "cloud.region",
+         "value": {
+          "stringValue": "redacted"
+         }
+        },
+        {
+         "key": "server.address",
+         "value": {
+          "stringValue": "warby-localstack"
+         }
+        },
+        {
+         "key": "server.port",
+         "value": {
+          "intValue": "4566"
+         }
+        },
+        {
+         "key": "db.system",
+         "value": {
+          "stringValue": "redacted"
+         }
+        },
+        {
+         "key": "db.operation",
+         "value": {
+          "stringValue": "redacted"
+         }
+        },
+        {
+         "key": "net.peer.name",
+         "value": {
+          "stringValue": "redacted"
+         }
+        },
+        {
+         "key": "aws.dynamodb.table_names",
+         "value": {
+          "arrayValue": {
+           "values": [
+            {
+             "stringValue": "omg-dev-springfield_orders"
+            }
+           ]
+          }
+         }
+        },
+        {
+         "key": "aws.dynamodb.scan_forward",
+         "value": {
+          "boolValue": false
+         }
+        },
+        {
+         "key": "aws.dynamodb.consistent_read",
+         "value": {
+          "boolValue": false
+         }
+        },
+        {
+         "key": "aws.request_id",
+         "value": {
+          "stringValue": "redacted"
+         }
+        },
+        {
+         "key": "retry_attempts",
+         "value": {
+          "intValue": "0"
+         }
+        },
+        {
+         "key": "http.status_code",
+         "value": {
+          "intValue": "200"
+         }
+        }
+       ],
+       "status": {}
+      },
+      {
+       "traceId": "3c7003978df556a6e7d729d90c5be5a7",
+       "spanId": "ea8e4a377445bb21",
+       "parentSpanId": "3ee057616857ac95",
+       "flags": 256,
+       "name": "DynamoDB.PutItem",
+       "kind": 3,
+       "startTimeUnixNano": "1791768819978562521",
+       "endTimeUnixNano": "1791768819997771705",
+       "attributes": [
+        {
+         "key": "rpc.system",
+         "value": {
+          "stringValue": "aws-api"
+         }
+        },
+        {
+         "key": "rpc.service",
+         "value": {
+          "stringValue": "DynamoDB"
+         }
+        },
+        {
+         "key": "rpc.method",
+         "value": {
+          "stringValue": "PutItem"
+         }
+        },
+        {
+         "key": "cloud.region",
+         "value": {
+          "stringValue": "redacted"
+         }
+        },
+        {
+         "key": "server.address",
+         "value": {
+          "stringValue": "warby-localstack"
+         }
+        },
+        {
+         "key": "server.port",
+         "value": {
+          "intValue": "4566"
+         }
+        },
+        {
+         "key": "db.system",
+         "value": {
+          "stringValue": "redacted"
+         }
+        },
+        {
+         "key": "db.operation",
+         "value": {
+          "stringValue": "redacted"
+         }
+        },
+        {
+         "key": "net.peer.name",
+         "value": {
+          "stringValue": "redacted"
+         }
+        },
+        {
+         "key": "aws.dynamodb.table_names",
+         "value": {
+          "arrayValue": {
+           "values": [
+            {
+             "stringValue": "omg-outbox-dev"
+            }
+           ]
+          }
+         }
+        },
+        {
+         "key": "aws.request_id",
+         "value": {
+          "stringValue": "redacted"
+         }
+        },
+        {
+         "key": "retry_attempts",
+         "value": {
+          "intValue": "0"
+         }
+        },
+        {
+         "key": "http.status_code",
+         "value": {
+          "intValue": "200"
+         }
+        }
+       ],
+       "status": {}
+      },
+      {
+       "traceId": "3c7003978df556a6e7d729d90c5be5a7",
+       "spanId": "e4f8440f37463bf8",
+       "parentSpanId": "3ee057616857ac95",
+       "flags": 256,
+       "name": "DynamoDB.UpdateItem",
+       "kind": 3,
+       "startTimeUnixNano": "1791768819998193166",
+       "endTimeUnixNano": "1791768820040151686",
+       "attributes": [
+        {
+         "key": "rpc.system",
+         "value": {
+          "stringValue": "aws-api"
+         }
+        },
+        {
+         "key": "rpc.service",
+         "value": {
+          "stringValue": "DynamoDB"
+         }
+        },
+        {
+         "key": "rpc.method",
+         "value": {
+          "stringValue": "UpdateItem"
+         }
+        },
+        {
+         "key": "cloud.region",
+         "value": {
+          "stringValue": "redacted"
+         }
+        },
+        {
+         "key": "server.address",
+         "value": {
+          "stringValue": "warby-localstack"
+         }
+        },
+        {
+         "key": "server.port",
+         "value": {
+          "intValue": "4566"
+         }
+        },
+        {
+         "key": "db.system",
+         "value": {
+          "stringValue": "redacted"
+         }
+        },
+        {
+         "key": "db.operation",
+         "value": {
+          "stringValue": "redacted"
+         }
+        },
+        {
+         "key": "net.peer.name",
+         "value": {
+          "stringValue": "redacted"
+         }
+        },
+        {
+         "key": "aws.dynamodb.table_names",
+         "value": {
+          "arrayValue": {
+           "values": [
+            {
+             "stringValue": "omg-outbox-dev"
+            }
+           ]
+          }
+         }
+        },
+        {
+         "key": "aws.request_id",
+         "value": {
+          "stringValue": "redacted"
+         }
+        },
+        {
+         "key": "retry_attempts",
+         "value": {
+          "intValue": "0"
+         }
+        },
+        {
+         "key": "http.status_code",
+         "value": {
+          "intValue": "200"
+         }
+        }
+       ],
+       "status": {}
+      }
+     ],
+     "schemaUrl": "https://opentelemetry.io/schemas/1.11.0"
+    },
+    {
+     "scope": {
+      "name": "sf-publisher"
+     },
+     "spans": [
+      {
+       "traceId": "3c7003978df556a6e7d729d90c5be5a7",
+       "spanId": "8c394b3cd83bd771",
+       "parentSpanId": "4f2a92454f8ab200",
+       "flags": 256,
+       "name": "sf-publisher.idempotency_check",
+       "kind": 1,
+       "startTimeUnixNano": "1791768819314619802",
+       "endTimeUnixNano": "1791768819321201434",
+       "status": {}
+      },
+      {
+       "traceId": "3c7003978df556a6e7d729d90c5be5a7",
+       "spanId": "1203f2175edf1b62",
+       "parentSpanId": "4f2a92454f8ab200",
+       "flags": 256,
+       "name": "sf-publisher.business_logic",
+       "kind": 1,
+       "startTimeUnixNano": "1791768819321281393",
+       "endTimeUnixNano": "1791768819977371220",
+       "attributes": [
+        {
+         "key": "omg.repository.type",
+         "value": {
+          "stringValue": "redacted"
+         }
+        },
+        {
+         "key": "omg.repository.class",
+         "value": {
+          "stringValue": "redacted"
+         }
+        },
+        {
+         "key": "omg.use_case.name",
+         "value": {
+          "stringValue": "redacted"
+         }
+        },
+        {
+         "key": "omg.use_case.success",
+         "value": {
+          "boolValue": false
+         }
+        },
+        {
+         "key": "omg.use_case.message",
+         "value": {
+          "stringValue": "redacted"
+         }
+        },
+        {
+         "key": "omg.helios.order_ids",
+         "value": {
+          "stringValue": "redacted"
+         }
+        },
+        {
+         "key": "omg.helios.order_count",
+         "value": {
+          "intValue": "0"
+         }
+        }
+       ],
+       "events": [
+        {
+         "timeUnixNano": "1791768819896237618",
+         "name": "transmission.capture",
+         "attributes": [
+          {
+           "key": "omg.environment",
+           "value": {
+            "stringValue": "redacted"
+           }
+          },
+          {
+           "key": "service.name",
+           "value": {
+            "stringValue": "redacted"
+           }
+          },
+          {
+           "key": "omg.transmission.request_uri",
+           "value": {
+            "stringValue": "redacted"
+           }
+          },
+          {
+           "key": "omg.transmission.response_uri",
+           "value": {
+            "stringValue": "redacted"
+           }
+          },
+          {
+           "key": "omg.transmission.status_code",
+           "value": {
+            "intValue": "0"
+           }
+          }
+         ]
+        }
+       ],
+       "status": {}
+      },
+      {
+       "traceId": "3c7003978df556a6e7d729d90c5be5a7",
+       "spanId": "3ee057616857ac95",
+       "parentSpanId": "4f2a92454f8ab200",
+       "flags": 256,
+       "name": "sf-publisher.outbox_recording",
+       "kind": 1,
+       "startTimeUnixNano": "1791768819977492846",
+       "endTimeUnixNano": "1791768820040433646",
+       "events": [
+        {
+         "timeUnixNano": "1791768820040423813",
+         "name": "outbox_failure_recorded",
+         "attributes": [
+          {
+           "key": "omg.environment",
+           "value": {
+            "stringValue": "redacted"
+           }
+          },
+          {
+           "key": "service.name",
+           "value": {
+            "stringValue": "redacted"
+           }
+          },
+          {
+           "key": "omg.error_message",
+           "value": {
+            "stringValue": "redacted"
+           }
+          }
+         ]
+        }
+       ],
+       "status": {}
+      },
+      {
+       "traceId": "3c7003978df556a6e7d729d90c5be5a7",
+       "spanId": "4f2a92454f8ab200",
+       "parentSpanId": "9f13b0303282248b",
+       "flags": 768,
+       "name": "sf-publisher.process_work_unit",
+       "kind": 1,
+       "startTimeUnixNano": "1791768819314081298",
+       "endTimeUnixNano": "1791768820041906241",
+       "attributes": [
+        {
+         "key": "omg.work_unit.id",
+         "value": {
+          "stringValue": "redacted"
+         }
+        },
+        {
+         "key": "omg.work_unit.domain",
+         "value": {
+          "stringValue": "redacted"
+         }
+        },
+        {
+         "key": "omg.work_unit.event_type",
+         "value": {
+          "stringValue": "redacted"
+         }
+        },
+        {
+         "key": "omg.work_unit.source",
+         "value": {
+          "stringValue": "redacted"
+         }
+        },
+        {
+         "key": "omg.work_unit.correlation_id",
+         "value": {
+          "stringValue": "redacted"
+         }
+        },
+        {
+         "key": "omg.work_unit.retry_count",
+         "value": {
+          "intValue": "0"
+         }
+        },
+        {
+         "key": "omg.work_unit.priority",
+         "value": {
+          "stringValue": "redacted"
+         }
+        },
+        {
+         "key": "omg.work_unit.region",
+         "value": {
+          "stringValue": "redacted"
+         }
+        },
+        {
+         "key": "omg.messaging.message_id",
+         "value": {
+          "stringValue": "redacted"
+         }
+        },
+        {
+         "key": "omg.messaging.receipt_handle_present",
+         "value": {
+          "boolValue": false
+         }
+        },
+        {
+         "key": "omg.messaging.receive_count",
+         "value": {
+          "intValue": "0"
+         }
+        },
+        {
+         "key": "omg.messaging.sent_timestamp",
+         "value": {
+          "stringValue": "redacted"
+         }
+        },
+        {
+         "key": "omg.lambda.log_group",
+         "value": {
+          "stringValue": "redacted"
+         }
+        },
+        {
+         "key": "omg.lambda.log_stream",
+         "value": {
+          "stringValue": "redacted"
+         }
+        },
+        {
+         "key": "omg.lambda.request_id",
+         "value": {
+          "stringValue": "redacted"
+         }
+        },
+        {
+         "key": "omg.processor_name",
+         "value": {
+          "stringValue": "redacted"
+         }
+        },
+        {
+         "key": "omg.region_policy",
+         "value": {
+          "stringValue": "redacted"
+         }
+        },
+        {
+         "key": "omg.attempt_region",
+         "value": {
+          "stringValue": "redacted"
+         }
+        },
+        {
+         "key": "omg.success",
+         "value": {
+          "boolValue": false
+         }
+        },
+        {
+         "key": "omg.disposition",
+         "value": {
+          "stringValue": "redacted"
+         }
+        }
+       ],
+       "events": [
+        {
+         "timeUnixNano": "1791768820041872991",
+         "name": "exception",
+         "attributes": [
+          {
+           "key": "exception.type",
+           "value": {
+            "stringValue": "redacted"
+           }
+          },
+          {
+           "key": "exception.message",
+           "value": {
+            "stringValue": "redacted"
+           }
+          },
+          {
+           "key": "exception.stacktrace",
+           "value": {
+            "stringValue": "redacted"
+           }
+          },
+          {
+           "key": "exception.escaped",
+           "value": {
+            "stringValue": "redacted"
+           }
+          },
+          {
+           "key": "omg.environment",
+           "value": {
+            "stringValue": "redacted"
+           }
+          },
+          {
+           "key": "service.name",
+           "value": {
+            "stringValue": "redacted"
+           }
+          }
+         ]
+        }
+       ],
+       "status": {
+        "code": 2
+       }
+      }
+     ]
+    },
+    {
+     "scope": {
+      "name": "opentelemetry.instrumentation.httpx",
+      "version": "0.66b0"
+     },
+     "spans": [
+      {
+       "traceId": "3c7003978df556a6e7d729d90c5be5a7",
+       "spanId": "efaa10c96c30b669",
+       "parentSpanId": "1203f2175edf1b62",
+       "flags": 256,
+       "name": "POST",
+       "kind": 3,
+       "startTimeUnixNano": "1791768819342760302",
+       "endTimeUnixNano": "1791768819875388463",
+       "attributes": [
+        {
+         "key": "http.method",
+         "value": {
+          "stringValue": "POST"
+         }
+        },
+        {
+         "key": "http.url",
+         "value": {
+          "stringValue": "https://helios-store.us-east-1.pvt.gateway.stage.warby.io/api/v4/estimate/place"
+         }
+        },
+        {
+         "key": "http.request.header.host",
+         "value": {
+          "stringValue": "redacted"
+         }
+        },
+        {
+         "key": "http.request.header.accept",
+         "value": {
+          "stringValue": "redacted"
+         }
+        },
+        {
+         "key": "http.request.header.accept-encoding",
+         "value": {
+          "stringValue": "redacted"
+         }
+        },
+        {
+         "key": "http.request.header.connection",
+         "value": {
+          "stringValue": "redacted"
+         }
+        },
+        {
+         "key": "http.request.header.content-type",
+         "value": {
+          "stringValue": "redacted"
+         }
+        },
+        {
+         "key": "http.request.header.user-agent",
+         "value": {
+          "stringValue": "redacted"
+         }
+        },
+        {
+         "key": "http.request.header.x-service-token",
+         "value": {
+          "stringValue": "redacted"
+         }
+        },
+        {
+         "key": "http.request.header.cookie",
+         "value": {
+          "stringValue": "redacted"
+         }
+        },
+        {
+         "key": "http.request.header.content-length",
+         "value": {
+          "stringValue": "redacted"
+         }
+        },
+        {
+         "key": "http.status_code",
+         "value": {
+          "intValue": "500"
+         }
+        },
+        {
+         "key": "http.response.header.server",
+         "value": {
+          "stringValue": "redacted"
+         }
+        },
+        {
+         "key": "http.response.header.content-type",
+         "value": {
+          "stringValue": "redacted"
+         }
+        },
+        {
+         "key": "http.response.header.date",
+         "value": {
+          "stringValue": "redacted"
+         }
+        },
+        {
+         "key": "http.response.header.cache-control",
+         "value": {
+          "stringValue": "redacted"
+         }
+        },
+        {
+         "key": "http.response.header.content-length",
+         "value": {
+          "stringValue": "redacted"
+         }
+        },
+        {
+         "key": "http.response.header.x-envoy-upstream-service-time",
+         "value": {
+          "stringValue": "redacted"
+         }
+        },
+        {
+         "key": "http.response.header.server-timing",
+         "value": {
+          "stringValue": "redacted"
+         }
+        },
+        {
+         "key": "http.response.header.cf-team",
+         "value": {
+          "stringValue": "redacted"
+         }
+        },
+        {
+         "key": "http.response.body.size",
+         "value": {
+          "intValue": "0"
+         }
+        }
+       ],
+       "status": {
+        "code": 2
+       }
+      }
+     ],
+     "schemaUrl": "https://opentelemetry.io/schemas/1.11.0"
+    },
+    {
+     "scope": {
+      "name": "opentelemetry.instrumentation.botocore",
+      "version": "0.66b0"
+     },
+     "spans": [
+      {
+       "traceId": "3c7003978df556a6e7d729d90c5be5a7",
+       "spanId": "8c7692e81a23bc1e",
+       "parentSpanId": "1203f2175edf1b62",
+       "flags": 256,
+       "name": "S3.PutObject",
+       "kind": 3,
+       "startTimeUnixNano": "1791768819921296679",
+       "endTimeUnixNano": "1791768819945292649",
+       "attributes": [
+        {
+         "key": "rpc.system",
+         "value": {
+          "stringValue": "aws-api"
+         }
+        },
+        {
+         "key": "rpc.service",
+         "value": {
+          "stringValue": "S3"
+         }
+        },
+        {
+         "key": "rpc.method",
+         "value": {
+          "stringValue": "PutObject"
+         }
+        },
+        {
+         "key": "cloud.region",
+         "value": {
+          "stringValue": "redacted"
+         }
+        },
+        {
+         "key": "server.address",
+         "value": {
+          "stringValue": "warby-localstack"
+         }
+        },
+        {
+         "key": "server.port",
+         "value": {
+          "intValue": "4566"
+         }
+        },
+        {
+         "key": "aws.request_id",
+         "value": {
+          "stringValue": "redacted"
+         }
+        },
+        {
+         "key": "retry_attempts",
+         "value": {
+          "intValue": "0"
+         }
+        },
+        {
+         "key": "http.status_code",
+         "value": {
+          "intValue": "200"
+         }
+        }
+       ],
+       "status": {}
+      },
+      {
+       "traceId": "3c7003978df556a6e7d729d90c5be5a7",
+       "spanId": "e3bc4d33e50f265a",
+       "parentSpanId": "1203f2175edf1b62",
+       "flags": 256,
+       "name": "S3.PutObject",
+       "kind": 3,
+       "startTimeUnixNano": "1791768819901638158",
+       "endTimeUnixNano": "1791768819947251747",
+       "attributes": [
+        {
+         "key": "rpc.system",
+         "value": {
+          "stringValue": "aws-api"
+         }
+        },
+        {
+         "key": "rpc.service",
+         "value": {
+          "stringValue": "S3"
+         }
+        },
+        {
+         "key": "rpc.method",
+         "value": {
+          "stringValue": "PutObject"
+         }
+        },
+        {
+         "key": "cloud.region",
+         "value": {
+          "stringValue": "redacted"
+         }
+        },
+        {
+         "key": "server.address",
+         "value": {
+          "stringValue": "warby-localstack"
+         }
+        },
+        {
+         "key": "server.port",
+         "value": {
+          "intValue": "4566"
+         }
+        },
+        {
+         "key": "aws.request_id",
+         "value": {
+          "stringValue": "redacted"
+         }
+        },
+        {
+         "key": "retry_attempts",
+         "value": {
+          "intValue": "0"
+         }
+        },
+        {
+         "key": "http.status_code",
+         "value": {
+          "intValue": "200"
+         }
+        }
+       ],
+       "status": {}
+      },
+      {
+       "traceId": "3c7003978df556a6e7d729d90c5be5a7",
+       "spanId": "6660f8351623112c",
+       "parentSpanId": "1203f2175edf1b62",
+       "flags": 256,
+       "name": "S3.PutObject",
+       "kind": 3,
+       "startTimeUnixNano": "1791768819958745915",
+       "endTimeUnixNano": "1791768819975045995",
+       "attributes": [
+        {
+         "key": "rpc.system",
+         "value": {
+          "stringValue": "aws-api"
+         }
+        },
+        {
+         "key": "rpc.service",
+         "value": {
+          "stringValue": "S3"
+         }
+        },
+        {
+         "key": "rpc.method",
+         "value": {
+          "stringValue": "PutObject"
+         }
+        },
+        {
+         "key": "cloud.region",
+         "value": {
+          "stringValue": "redacted"
+         }
+        },
+        {
+         "key": "server.address",
+         "value": {
+          "stringValue": "warby-localstack"
+         }
+        },
+        {
+         "key": "server.port",
+         "value": {
+          "intValue": "4566"
+         }
+        },
+        {
+         "key": "aws.request_id",
+         "value": {
+          "stringValue": "redacted"
+         }
+        },
+        {
+         "key": "retry_attempts",
+         "value": {
+          "intValue": "0"
+         }
+        },
+        {
+         "key": "http.status_code",
+         "value": {
+          "intValue": "200"
+         }
+        }
+       ],
+       "status": {}
+      }
+     ],
+     "schemaUrl": "https://opentelemetry.io/schemas/1.11.0"
+    }
+   ]
+  }
+ ]
+}

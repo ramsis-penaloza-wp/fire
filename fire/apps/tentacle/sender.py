@@ -17,7 +17,7 @@ import httpx
 from fire.apps.config import TentacleConfig
 from fire.apps.tentacle.counters import SourceCounters
 from fire.core.domain.ingest import IngestReport
-from fire.core.domain.observation import ShapeObservation
+from fire.core.domain.observation import ShapeObservation, SpanObservation
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +31,7 @@ type Ack = Callable[[], Awaitable[None]]
 class Outgoing:
     """A built observation and the ack of the record it came from."""
 
-    observation: ShapeObservation
+    observation: ShapeObservation | SpanObservation
     ack: Ack
 
 
@@ -108,9 +108,11 @@ class Sender:
         """Posts one source's batch, retrying as configured; counts it sent or unsent."""
         source = batch[0].observation.source
         # Nulls stay: a field of a JSON null has a null cardinality, whose default is "1".
-        content = json.dumps(
-            {"shapes": [item.observation.model_dump(mode="json") for item in batch]}
-        ).encode()
+        posted: dict[str, list[dict[str, object]]] = {"shapes": [], "spans": []}
+        for item in batch:
+            kind = "spans" if isinstance(item.observation, SpanObservation) else "shapes"
+            posted[kind].append(item.observation.model_dump(mode="json"))
+        content = json.dumps(posted).encode()
         status = "none"
         attempt = 0
         while attempt < self._config.retry.max_attempts:
@@ -154,7 +156,8 @@ class Sender:
         except ValueError:
             logger.warning("body report unreadable: source=%s size=%d", source, len(batch))
         else:
-            counters.body_duplicate += report.shapes.duplicate
-            counters.body_rejected.update(rejection.reason for rejection in report.shapes.rejected)
+            for counts in (report.shapes, report.spans):
+                counters.body_duplicate += counts.duplicate
+                counters.body_rejected.update(rejection.reason for rejection in counts.rejected)
         for item in batch:
             await settle(item.ack, source)

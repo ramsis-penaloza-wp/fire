@@ -1,9 +1,10 @@
 """L2: OMG's order payloads posted through the inbound proxy in front of OMG's local API.
 
-Needs OMG's local stack (dev/omg/README.md): the API at `OMG_API_UPSTREAM` (default
-http://localhost:8020) and Jaeger's query API at `OMG_JAEGER_URL` (default
-http://localhost:16686). The join to OMG's trace is checked in Jaeger: OMG's `SERVER` span for
-`POST /v1/orders/place_order` must be a child of the span id the proxy's shapes carry.
+Needs OMG's local stack with FIRE's collector override (dev/omg/README.md, section a): the API
+at `OMG_API_UPSTREAM` (default http://localhost:8020), and the collector exporting to the
+tentacle's receiver at `OMG_OTLP_LISTEN` (default 127.0.0.1:4318), which this test runs. The
+join is checked in FIRE: the `SERVER` span of `POST /v1/orders/place_order` the receiver gets
+must be a child of the span id the proxy's shapes carry.
 """
 
 from __future__ import annotations
@@ -37,7 +38,8 @@ PAYLOADS = (
     "test_rma_place_order_payload.json",
     "test_rma_exchange_lower_value.json",
 )
-JAEGER_WAIT_S = 60.0
+# OMG's SDK exports every 5 s, then its collector forwards to the receiver.
+SPAN_WAIT_S = 60.0
 # After a 500, OMG's local API closes the keep-alive connection without `Connection: close`,
 # so a request sent on it in the next milliseconds is lost; the proxy answers it with this.
 UPSTREAM_ABORTED = "upstream-aborted"
@@ -57,9 +59,11 @@ class RecordingTransport(httpx.AsyncBaseTransport):
         self.bodies.append(request.content.decode())
         return await self.inner.handle_async_request(request)
 
+    def posted(self, kind: str) -> list[dict[str, Any]]:
+        return [item for body in self.bodies for item in json.loads(body)[kind]]
+
     def keyed(self, key: str) -> list[dict[str, Any]]:
-        shapes = [shape for body in self.bodies for shape in json.loads(body)["shapes"]]
-        return [shape for shape in shapes if _key(shape["channel"]) == key]
+        return [shape for shape in self.posted("shapes") if _key(shape["channel"]) == key]
 
 
 def _key(channel: dict[str, Any]) -> str:
@@ -101,7 +105,8 @@ async def proxied(
                 "kind": "http_proxy",
                 "listen_port": port,
                 "upstream_env": "OMG_API_UPSTREAM",
-            }
+            },
+            {"id": "omg-traces", "kind": "otlp", "listen_env": "OMG_OTLP_LISTEN"},
         ],
     }
     (fire_yml.parent / "systems" / "omg.yml").write_text(yaml.safe_dump(system), encoding="utf-8")
@@ -111,6 +116,7 @@ async def proxied(
         "FIRE_API_TOKEN": TOKEN,
         "FIRE_BODY_URL": "http://body",
         "OMG_API_UPSTREAM": os.environ.get("OMG_API_UPSTREAM", "http://localhost:8020"),
+        "OMG_OTLP_LISTEN": os.environ.get("OMG_OTLP_LISTEN", "127.0.0.1:4318"),
     }
     transport = RecordingTransport(httpx.ASGITransport(app=app))
     stop = asyncio.Event()
@@ -133,29 +139,15 @@ async def proxied(
     app_module._container = None
 
 
-async def _server_span_parents(jaeger: httpx.AsyncClient, trace_id: str) -> set[str]:
-    """Parent span ids of the trace's spans named after the route."""
-    response = await jaeger.get(f"/api/traces/{trace_id}")
-    if response.status_code != 200:
-        return set()
-    spans = [span for trace in response.json().get("data") or [] for span in trace["spans"]]
-    return {
-        reference["spanID"]
-        for span in spans
-        if span["operationName"] == ROUTE
-        for reference in span.get("references", [])
-        if reference.get("refType") == "CHILD_OF"
-    }
-
-
-async def _wait_for_child(jaeger: httpx.AsyncClient, trace_id: str, span_id: str) -> None:
-    """Polls Jaeger until the route's span in `trace_id` is a child of `span_id`."""
-    parents: set[str] = set()
-
-    async def fetch() -> None:
-        parents.update(await _server_span_parents(jaeger, trace_id))
-
-    await _until(f"OMG span under {span_id}", lambda: span_id in parents, JAEGER_WAIT_S, fetch)
+def _has_server_span(transport: RecordingTransport, trace_id: str, parent_id: str) -> bool:
+    """Whether the receiver sent the route's `SERVER` span in `trace_id` under `parent_id`."""
+    return any(
+        span["operation"] == ROUTE
+        and span["kind"] == "server"
+        and span["trace_id"] == trace_id
+        and span["parent_span_id"] == parent_id
+        for span in transport.posted("spans")
+    )
 
 
 async def _post_order(client: httpx.AsyncClient, payload: bytes) -> int:
@@ -171,7 +163,7 @@ async def _post_order(client: httpx.AsyncClient, payload: bytes) -> int:
     raise AssertionError(f"OMG dropped the connection {ATTEMPTS} times in a row")
 
 
-async def test_order_payloads_give_route_channels_joined_to_omg_traces(
+async def test_order_payloads_give_route_channels_joined_to_omg_server_spans(
     proxied: tuple[str, RecordingTransport, asyncio.Event, asyncio.Task[int]],
 ) -> None:
     base, transport, stop, running = proxied
@@ -183,10 +175,16 @@ async def test_order_payloads_give_route_channels_joined_to_omg_traces(
         lambda: len(transport.keyed(REQUEST)) == len(PAYLOADS),
         15,
     )
+    requests = transport.keyed(REQUEST)
+    for shape in requests:
+        await _until(
+            f"OMG's SERVER span under {shape['span_id']}, through the collector",
+            lambda shape=shape: _has_server_span(transport, shape["trace_id"], shape["span_id"]),
+            SPAN_WAIT_S,
+        )
     stop.set()
     assert await asyncio.wait_for(running, 15) == EXIT_OK
 
-    requests = transport.keyed(REQUEST)
     responses = [
         shape
         for status in sorted(set(statuses))
@@ -198,10 +196,6 @@ async def test_order_payloads_give_route_channels_joined_to_omg_traces(
         streams = await client.get("/v0/systems/omg/streams", headers={"X-FIRE-Token": TOKEN})
     observed = {stream["key"]: stream["observations"] for stream in streams.json()["streams"]}
     assert observed[REQUEST] == len(PAYLOADS)
-    jaeger_url = os.environ.get("OMG_JAEGER_URL", "http://localhost:16686")
-    async with httpx.AsyncClient(base_url=jaeger_url, trust_env=False, timeout=10) as jaeger:
-        for shape in requests:
-            await _wait_for_child(jaeger, shape["trace_id"], shape["span_id"])
 
 
 async def test_openapi_document_crosses_the_proxy_unchanged(

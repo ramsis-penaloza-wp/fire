@@ -28,7 +28,8 @@ from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 from uvicorn.protocols.http.h11_impl import H11Protocol
 
-from fire.adapters.sources.http_proxy import HttpProxy, listen
+from fire.adapters.sources.http_proxy import HttpProxy
+from fire.adapters.sources.listener import listen
 from fire.core.ports.exchange_source import (
     ExchangeNote,
     ExchangeSkipReason,

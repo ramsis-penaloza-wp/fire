@@ -9,76 +9,155 @@ tentacle, so no payload, URL, or header leaves it. Models are in
 [tentacle.md](tentacle.md); flows in [flows-and-paths.md](flows-and-paths.md). OMG is the
 example.
 
-**Status:** [Inbound proxy](#inbound-proxy) is the contract of the shipped code (step 1.6), and
-so are the template rules of [Per-host templates](#per-host-templates) as the proxy applies
-them to OpenAPI templates. The rest is a proposal: steps 1.4 and 1.5 turn their sections into
-contracts.
+**Status:** the contract of the shipped code, except [Capture events](#capture-events), a
+proposal for step 1.7. [OTLP receiver](#otlp-receiver), [Span mapping](#span-mapping), and
+[Bodies on client spans](#bodies-on-client-spans) are step 1.4;
+[Operation names](#operation-names) is step 1.5; [Inbound proxy](#inbound-proxy) is step 1.6,
+which also shipped the template rules of [Per-host templates](#per-host-templates) as the proxy
+applies them to OpenAPI templates.
 
 ## OTLP receiver
 
-The watched system's OpenTelemetry collector gets one more exporter, `otlphttp` with
-`encoding: json`, appended to its traces pipeline next to the exporters already there; none is
-removed or replaced. With JSON, FIRE parses OTLP with the standard library and needs no
-protobuf dependency. OMG's `docker/local/otel-collector-config.yml` exports traces to
-`[otlp, debug]` (Jaeger at `warby-jaeger:4317`); `dev/omg/` mounts a copy with this change
-([dev/omg/README.md](../../dev/omg/README.md)).
+Source kind `otlp` runs an OTLP/HTTP receiver in the tentacle. The watched system's
+OpenTelemetry collector gets one more exporter, `otlp_http` with `encoding: json`, appended to
+its traces pipeline next to the exporters already there; none is removed or replaced. With
+JSON, FIRE parses OTLP with the standard library and needs no protobuf dependency. OMG's
+`docker/local/otel-collector-config.yml` exports traces to `[otlp, debug]` (Jaeger at
+`warby-jaeger:4317`); `dev/omg/otel-collector-config.yml` is a copy with this change, mounted
+by `dev/omg/compose.fire.yml` ([dev/omg/README.md](../../dev/omg/README.md)). Collector 0.157,
+which OMG's unpinned image runs, still takes the old name `otlphttp` with a deprecation warning;
+images from before the rename know only `otlphttp`.
 
 ```yaml
 exporters:
-  otlphttp/fire:
+  otlp_http/fire:
     endpoint: http://host.docker.internal:4318   # the tentacle; /v1/traces is appended
     encoding: json
+    compression: none
 service:
   pipelines:
     traces:
       receivers: [otlp]
-      exporters: [otlp, debug, otlphttp/fire]
+      exporters: [otlp, debug, otlp_http/fire]
 ```
+
+| Module | Holds |
+|--------|-------|
+| `fire/adapters/sources/otlp.py` | `OtlpReceiver`, and `parse_traces` with the attribute allowlist |
+| `fire/adapters/sources/listener.py` | `listen` and the quiet uvicorn server the receiver and the proxy share |
+| `fire/core/ports/span_source.py` | `SpanSource`, `SpanSink`, `RawSpan`, `RawLink`, `SpanBatchResult`, `SpanRequestNote` |
+| `fire/core/services/span_pipeline.py` | `SpanPipeline`, `SpanOutcome`, and its reason codes |
+| `fire/core/domain/operation.py` | `OperationNamer`, `OperationInputs`, the id rules, and `OperationRules` |
+| `fire/apps/tentacle/sources.py` | `open_otlp_receiver`: checks the listen address and binds it |
+| `fire/apps/tentacle/runner.py` | `PlannedReceiver`, and the sink that maps each batch and queues it |
 
 | Key | Required | Meaning |
 |-----|----------|---------|
-| `id`, `kind` | yes | Common keys ([tentacle.md](tentacle.md)); `kind: otlp`. No `envelope` |
-| `listen_port` | yes | Receiver port; OMG uses `4318`, which its compose file does not publish |
-| `listen_host` | no | Bind address, default `127.0.0.1` |
-| `capture_event` | no | A span event that points at archived bodies, see [Capture events](#capture-events) |
+| `id`, `kind` | yes | Common keys ([tentacle.md](tentacle.md)); `kind: otlp`. No `direction` or `envelope` |
+| `listen_env` | yes | Env var holding the listen address, `host:port`; an IPv6 host goes in brackets |
 
-- `POST /v1/traces` takes `application/json`, plain or `Content-Encoding: gzip`, in the OTLP
-  JSON encoding: hex ids, integer or named enums, nanosecond timestamps as strings.
-- Protobuf gets `415`, so a misconfigured exporter fails visibly in the collector's log. A
-  body that is not an `ExportTraceServiceRequest` gets `400`, which the collector does not
-  retry. A full sender buffer gives `503` with `Retry-After`, so the collector's queue holds
-  the spans. Otherwise `200` with `{}`, or `{"partialSuccess": {"rejectedSpans": N}}`.
+```yaml
+sources:
+  - {id: omg-traces, kind: otlp, listen_env: OMG_OTLP_LISTEN}
+```
+
+The address is in an env var, not the YAML, because it differs per machine: locally
+`OMG_OTLP_LISTEN=127.0.0.1:4318`, the endpoint of FIRE's collector config. Docker Desktop's
+`host.docker.internal` reaches the host's loopback (checked on macOS); on Linux the receiver
+must listen on `0.0.0.0:4318`. As for every kind, an unset env var skips the source, so a
+tentacle run for other sources neither binds the port nor runs forever.
+
+- At startup ([Process](tentacle.md#process)), a value that is not `host:port` with a port from
+  `1` to `65535` is a startup error naming the env var, and an address that cannot be bound one
+  naming the address. On stop the receiver accepts no new connection and finishes the requests
+  in flight within 5 seconds, as the proxy does.
+- `POST /v1/traces` takes `application/json` (parameters ignored), plain or
+  `Content-Encoding: gzip`, in the OTLP JSON encoding: hex ids, integer or named enums,
+  nanosecond timestamps as strings. A body over 16 MiB, as sent or once decoded, gets `413`.
+- Protobuf, another media type, or another coding gets `415`, so a misconfigured exporter fails
+  visibly in the collector's log. A body that is not JSON, or whose containers (the request,
+  `resourceSpans`, `resource`, `scopeSpans`, `spans`, `attributes`, `events`, `links`,
+  `status`, or an attribute) have the wrong JSON type, gets `400`. The collector retries none
+  of these. A leaf of the wrong type, such as a numeric `traceId`, reads as absent, and the
+  span is checked as in [Span mapping](#span-mapping).
+- A batch is taken whole or not at all: when the observations its spans build do not all fit
+  the tentacle's buffer, nothing of it is counted or queued and the answer is `503` with
+  `Retry-After: 1`, so the collector's queue holds the spans. `tentacle.buffer_size` (default
+  10000) must exceed the observations of the largest batch; OMG's SDKs export at most 512 spans
+  per batch. Otherwise `200` with `{}`, or `{"partialSuccess": {"rejectedSpans": N}}` counting
+  the spans [Span mapping](#span-mapping) rejected.
+- Another path gets `404`, another method `405`. Every error body is a `google.rpc.Status`,
+  `{"code": N, "message": "…"}`, with a fixed message that quotes nothing of the request.
+
+### Counts and logs
+
+Counted on the source's [counters line](tentacle.md#sending-to-the-body). `read` counts spans,
+`built` the span observations plus the shapes of their bodies.
+
+| Count | When |
+|-------|------|
+| `rejected:` a reason of [Span mapping](#span-mapping) | A span not sent |
+| `skipped:` a reason of [Bodies on client spans](#bodies-on-client-spans) | A body not shaped; `sampled_out` once per span |
+| `noted: operation_unlisted`, `invalid_link` | Counted; the span is sent |
+| `noted: buffer_full` | A batch answered `503`; the collector resends it |
+| `noted: unsupported_media_type`, `malformed_request`, `request_too_large` | A request answered `415`, `400`, or `413`; the collector's log says how many spans it held |
+
+Its log lines: `spans received: source=<id>` on the first batch with spans,
+`request refused: source=<id> status=<code> reason=<reason>` the first time each reason occurs,
+and `request failed: source=<id> error=<type>` for an unexpected error in the receiver, which
+answers `500`. uvicorn's own lines carry no request data; its access log is off as for the
+proxy.
 
 ## Span mapping
+
+`parse_traces` (`fire/adapters/sources/otlp.py`) reads each span into a `RawSpan` holding only
+the [allowlisted](#attribute-allowlist) attributes; `SpanPipeline`
+(`fire/core/services/span_pipeline.py`) turns it into a `SpanObservation` and the shapes of its
+[bodies](#bodies-on-client-spans).
 
 | `SpanObservation` field | From |
 |-------------------------|------|
 | `system`, `source` | The tentacle's system and this source's `id` |
-| `trace_id`, `span_id` | `traceId`, `spanId` |
+| `trace_id`, `span_id` | `traceId`, `spanId`, read in either case and kept lowercase |
 | `parent_span_id` | `parentSpanId`; empty or absent gives `null` |
 | `links` | `{trace_id, span_id}` per entry of `links`; attributes, `traceState`, and flags dropped |
-| `service` | Resource attribute `service.name` |
-| `kind` | 1 `internal`, 2 `server`, 3 `client`, 4 `producer`, 5 `consumer`; 0 gives `internal` |
+| `service` | Resource attribute `service.name` of the span's `resourceSpans` |
+| `kind` | 1 or `SPAN_KIND_INTERNAL` `internal`, 2 `server`, 3 `client`, 4 `producer`, 5 `consumer`, or their `SPAN_KIND_*` names; any other value gives `internal` |
 | `operation` | [Operation names](#operation-names) |
-| `status_code` | `http.response.status_code`, else `http.status_code`; 100 to 599, else `null` |
-| `error` | `status.code` is 2 (`ERROR`), or `status_code` is 500 or more |
-| `start`, `duration_ms` | `startTimeUnixNano` as UTC; `(endTimeUnixNano - startTimeUnixNano) / 1e6` |
+| `status_code` | The integer attribute `http.response.status_code`, else `http.status_code`; 100 to 599, else `null` |
+| `error` | `status.code` is 2 or `STATUS_CODE_ERROR`, or `status_code` is 500 or more |
+| `start`, `duration_ms` | `startTimeUnixNano` as UTC, to the microsecond; `(endTimeUnixNano - startTimeUnixNano) / 1e6` |
 
-`status.message` is never read: it can hold exception text. A link with an invalid id is
-dropped and counted; the span is kept. OMG's listener span links to the span that wrote the
-event (`writer_traceparent`, `adapters/src/clients/aws/lambda_base/base_listener.py`). A span
-has no `observation_id`; a batch the collector resends is a duplicate by `(trace_id, span_id)`.
+Times are integers or strings of decimal digits. `status.message` is never read: it can hold
+exception text, as OMG's DynamoDB spans do for a failed condition. A link with an invalid id is
+dropped and counted `invalid_link`; the span is kept. OMG's listener span
+(`dynamo_listener.distribute_work`) starts a new trace and links to the `SERVER` span of the
+request that wrote the event (`writer_traceparent`,
+`adapters/src/clients/aws/lambda_base/base_listener.py`); the recorded place-order flow shows
+it. A span has no `observation_id`; a batch the collector resends is a duplicate by
+`(trace_id, span_id)`.
 
-A span is `rejected` and not sent for `invalid_ids` (missing, wrong length, not hex, or all
-zeros), `invalid_times` (missing, or end before start), `no_service`, or `no_operation` (none
-can be built, or over 256 characters). Nothing of a rejected span is logged.
+A span is `rejected` and not sent; the first failing check decides. Nothing of a rejected span
+is logged.
+
+| Reason | When |
+|--------|------|
+| `invalid_ids` | `traceId` or `spanId` missing, of the wrong length, not hex, or all zeros; or a `parentSpanId` that is set and invalid |
+| `invalid_times` | A time missing, zero, or negative, the end before the start, or past year 9999 |
+| `no_service` | No `service.name`, or an empty one |
+| `no_operation` | No [rule](#operation-names) builds a name, or it is over 256 characters |
+| `invalid` | The observation does not validate, such as a `service.name` over 256 characters |
 
 ### Attribute allowlist
 
 OMG emits the old HTTP names: it does not set `OTEL_SEMCONV_STABILITY_OPT_IN`, so its 0.66b0
 instrumentors use the default conventions, and an httpx `CLIENT` span carries only
 `http.method`, `http.url`, and `http.status_code` from them. When both names are present, the
-stable one is read.
+stable one is read. The allowlist is `SPAN_ATTRIBUTES`, `RESOURCE_ATTRIBUTES`, and
+`EVENT_ATTRIBUTES` in `fire/adapters/sources/otlp.py`; `parse_traces` decodes no other value.
+A value of the wrong type reads as absent: an integer comes only from an `intValue`, a string
+only from a `stringValue`, and the table names from an `arrayValue` of strings. When a key
+appears twice, the first one is read.
 
 | Attribute | Spans | Becomes |
 |-----------|-------|---------|
@@ -91,17 +170,18 @@ stable one is read.
 | `rpc.system`, `rpc.service`, `rpc.method` | all | AWS or RPC `operation` |
 | `aws.dynamodb.table_names`, `aws.sns.topic.arn`, `aws.s3.bucket` | AWS | Resource |
 | `messaging.destination.name`, `messaging.destination` | AWS SQS | Resource |
-| `http.request.body`; event `http.response.body` | `client` | Shapes, see [Bodies on client spans](#bodies-on-client-spans) |
-| The `capture_event` attributes | all | The capture index |
+| `http.request.body`; attribute `http.response.body` of the first event `http.response.body` | `client` | Shapes, see [Bodies on client spans](#bodies-on-client-spans) |
 
 Everything else is dropped without being copied, logged, or named in a count. That includes
 every `http.request.header.*` and `http.response.header.*` (OMG's httpx hooks set them on every
 `CLIENT` span), `http.request.body.size`, `http.response.body.size`, `http.target`,
 `http.host`, `http.user_agent`, `url.query`, `net.*`, `aws.queue_url` and `messaging.url`
 (account ids), `aws.request_id`, `messaging.message_id`, `cloud.region`, `db.*`, other `aws.*`,
-OMG's `omg.*` (including `omg.work_unit.id`) and `lambda.*`, `exception` events, and every
-other span event. For SNS, botocore puts the full topic ARN in `messaging.destination`; that
-attribute is read for SQS only.
+OMG's `omg.*` (including `omg.work_unit.id`) and `lambda.*`, `exception` events, every other
+span event, `transmission.capture` included until step 1.7, and every resource attribute but
+`service.name`. For SNS, botocore 0.66b0 puts the full topic ARN, account id included, in both
+`messaging.destination` and `messaging.destination.name`; they are read for SQS only, where
+`messaging.destination` is the queue name.
 
 ### Bodies on client spans
 
@@ -109,15 +189,17 @@ OMG's httpx hooks (`adapters/src/middleware/instrumentation/httpx_hooks.py`) set
 body as the span attribute `http.request.body` and the response body as a span event named
 `http.response.body`, only when the client opts in through `capture_body_paths`
 (`adapters/src/clients/base_client.py`): Oracle OM `*`, Order Services `/v1/omg/*`, CTO
-`/v1/*`. A body over 4032 bytes (`_HTTPX_BODY_MAX_BYTES`) is cut and gets
-`...[truncated N bytes]` appended; a body that is not UTF-8 becomes hex. Checked in order:
+`/v1/*`. None of the calls of OMG's place-order flow opts in, so its recordings carry no body.
+A body over 4032 bytes (`_HTTPX_BODY_MAX_BYTES`) is cut and gets `...[truncated N bytes]`
+appended; a body that is not UTF-8 becomes hex. Checked in order, per body:
 
 | Body | Result |
 |------|--------|
 | Ends with `...[truncated `, digits, ` bytes]` | `skipped: body_truncated` |
 | Empty | `skipped: body_empty` |
-| Not JSON, such as OMG's hex fallback or a form body | `skipped: body_not_json` |
+| Not JSON, such as OMG's hex fallback or a form body, or nested too deep to parse | `skipped: body_not_json` |
 | JSON, not an object or array | `skipped: body_not_container` |
+| Generalizing, fingerprinting, or building the observation fails | `skipped: shaping_failed` |
 | A JSON object or array | Generalized by `FlatStarShapeGeneralizer`, fingerprinted, sent |
 
 | `ShapeObservation` field | Value |
@@ -128,12 +210,17 @@ body as the span attribute `http.request.body` and the response body as a span e
 | `trace_id`, `span_id` | The span's; `region`, `work_id`, and `correlation_id` are `null` |
 
 A span with a request shape and no `status_code` also gives an empty shape on the `none`
-response channel ([observations.md](observations.md)). The body string is dropped after
-generalization. Bodies on other kinds are ignored. Sampling uses the tentacle's hash rule on
-`{trace_id}:{span_id}`, so a request and its response are kept or dropped together; spans are
-never sampled, because paths need every span.
+response channel ([observations.md](observations.md)). A response body with no `status_code`,
+or with a status outside `200` to `599`, is `skipped: status_unclassified`. The body string is
+dropped after generalization. Bodies on other kinds, and on a rejected span, are ignored.
+Sampling uses the tentacle's hash rule on `{trace_id}:{span_id}`, so a request and its response
+are kept or dropped together, counted once as `skipped: sampled_out`; spans are never sampled,
+because paths need every span.
 
 ### Capture events
+
+Proposal for step 1.7: the receiver does not index captures yet, and `capture_event` is not a
+key of the `otlp` source yet.
 
 OMG's transmission captures (`adapters/src/clients/transmission_capture.py`) add the span event
 `transmission.capture` through `set_span_event`, which prefixes every attribute with `omg.`, so
@@ -159,31 +246,39 @@ the event.
 
 ## Operation names
 
-An operation name is built only from names chosen by code or infrastructure: methods, route
-templates, hosts, path literals, AWS service and operation names, and resource names. The first
-rule that applies wins.
+`OperationNamer` (`fire/core/domain/operation.py`) builds an operation name only from names
+chosen by code or infrastructure: methods, route templates, hosts, path literals, AWS service
+and operation names, and resource names. It reads an `OperationInputs`, the allowlisted
+attributes a name may come from. The first rule that applies wins.
 
 | # | Span | `operation` |
 |---|------|-------------|
-| 1 | `rpc.system` is `aws-api` | `{rpc.service}.{rpc.method} {resource}`, or without the resource |
-| 2 | Another `rpc.system` | `{rpc.service}/{rpc.method}` |
+| 1 | `rpc.system` is `aws-api`, with `rpc.service` and `rpc.method` | `{rpc.service}.{rpc.method} {resource}`, or without the resource |
+| 2 | Another `rpc.system`, with `rpc.service` and `rpc.method` | `{rpc.service}/{rpc.method}` |
 | 3 | `server` with an HTTP method | `{METHOD} {http.route}`, or `{METHOD} {unrouted}` with no route |
 | 4 | `client` with an HTTP method and a host | `{METHOD} {host}{path}` |
 | 5 | Any other | The span name, each segment between spaces and `/` passed through the id rules |
 
-`METHOD` is the method in uppercase when it is one of the nine HTTP methods, else `HTTP`, as
-FastAPI's instrumentor names spans. A request matching no route gets a `SERVER` span with no
-`http.route`; rule 3 keeps it visible without naming its path.
+`METHOD` is the method in uppercase when it is one of the ten methods OMG's 0.66b0 instrumentors
+keep (`GET`, `HEAD`, `POST`, `PUT`, `DELETE`, `CONNECT`, `OPTIONS`, `TRACE`, `PATCH`, `QUERY`),
+else `HTTP`, as FastAPI's instrumentor names spans; their `_OTHER` gives `HTTP`. A request
+matching no route gets a `SERVER` span with no `http.route`; rule 3 keeps it visible without
+naming its path.
 
-For rule 4, `host` is `server.address`, else the URL's host, lowercased, plus `:{port}` when
-the port is given and is neither 80 nor 443; an IP literal becomes `{ip}`. `path` is the URL
-path, `/` when empty. A host declared in `operations.http` takes its entry's alias and
-templates; any other host keeps its name and each path segment goes through the id rules.
+For rule 4, `host` is `server.address`, else the URL's host, lowercased; userinfo is dropped,
+and a host with a character outside `a-z 0-9 . _ -` counts as no host, so rule 5 applies. The
+host gets `:{port}` when a port is given (`server.port`, else the URL's) and is neither 80 nor
+443; a port outside `1` to `65535` is ignored. An IP literal becomes `{ip}`. `path` is the URL
+path, `/` when empty; with no URL at all, the name is `{METHOD} {host}`. A host declared in
+`operations.http` takes its entry's alias and templates; any other host keeps its name and each
+path segment goes through the id rules. A name that is empty, or only spaces, is none; a name
+over 256 characters is none too, and either rejects the span as `no_operation`.
 
 ### Id rules
 
-A path or span-name segment is percent-decoded and becomes `{id}` when any rule matches. A
-segment already of the form `{name}` is kept.
+A path or span-name segment is percent-decoded and becomes `{id}` when any rule matches
+(`ID_RULES`). A segment already of the form `{name}`, the route template grammar, is kept;
+empty segments stay empty.
 
 | Rule | Matches | Example |
 |------|---------|---------|
@@ -197,7 +292,9 @@ segment already of the form `{name}` is kept.
 
 `v1`, `api-v2`, `oauth2`, `deadbeef`, and `order-items` pass every rule. The rules catch values
 in id form only; a person's name as a path segment passes them, and declaring the host closes
-its paths.
+its paths. The Mixed rule subsumes most longer ids of the other forms; each rule still stands
+alone, so a letters-only UUID or hex id is caught too. A percent-encoded `/` or brace decodes
+into an unsafe character, so `%2F` and `%7Bname%7D` give `{id}`.
 
 ### Per-host templates
 
@@ -211,13 +308,25 @@ operations:
         - /api/{version}/orders/{order_id}
 ```
 
-- Entries are tried in order; the first whose `hosts` matches wins.
-- A template segment is a literal or `{name}` (lowercase letters, digits, `_`). `{name}`
-  matches one non-empty segment and stays `{name}` in the operation. Among matching templates,
-  the first literal where they differ, reading left to right, beats a placeholder.
+`OperationRules` and `HostRule` (`fire/core/domain/operation.py`) are the system YAML's
+`operations` block; it defaults to no declared host.
+
+- Entries are tried in order; the first whose `hosts` matches wins. A pattern is an exact
+  lowercase name, or `*.` and a suffix, which matches the names ending in `.` and that suffix,
+  never the suffix itself. The alias replaces the host and its port.
+- A template starts with `/` and has at most 240 characters. A segment is a literal of
+  `A-Z a-z 0-9 - . _ ~`, possibly empty, or a whole-segment `{name}` (a lowercase letter or `_`,
+  then lowercase letters, digits, or `_`). `{name}` matches one non-empty segment and stays
+  `{name}` in the operation. Among matching templates, the first literal where they differ,
+  reading left to right, beats a placeholder. The path's segments are percent-decoded before
+  matching.
 - A path matching no template is `{METHOD} {alias}/{unlisted}`, counted `operation_unlisted`; a
-  declared host never falls back to the id rules.
-- Unknown keys, duplicate templates, and an alias outside `[a-z0-9.-]` fail validation.
+  declared host never falls back to the id rules. A call with no URL is `{METHOD} {alias}`.
+  An entry without `paths` closes every path of its hosts.
+- Unknown keys, an empty `hosts`, a host pattern of another form, an alias outside `[a-z0-9.-]`
+  or longer than 64 characters, a template of another form, two templates with the same
+  literals in the same places (placeholder names aside), and a template too long for a name
+  with its alias and the longest method fail validation.
 
 ### AWS resources
 
@@ -226,15 +335,19 @@ name and keeps the name the system gives it, environment included.
 
 | `rpc.service` | Resource |
 |---------------|----------|
-| `DynamoDB` | `aws.dynamodb.table_names`; several (batch calls) sorted and joined with `,` |
-| `SNS` | `aws.sns.topic.arn` after its last `:`. `Publish` spans are `producer` spans |
+| `DynamoDB` | `aws.dynamodb.table_names`; several (batch calls) sorted and joined with `,`. `TransactWriteItems` carries none |
+| `SNS` | `aws.sns.topic.arn` after its last `:`. `Publish` spans are `producer` spans, named `{topic} send` |
 | `SQS` | `messaging.destination.name`, else `messaging.destination`: the queue name |
 | `S3` | `aws.s3.bucket`; 0.66b0 does not set it, so OMG's S3 calls have none |
 | Others | None |
 
 ### Examples
 
-Partner hosts are illustrative; OMG's table and topic are from `config/dev.yml`.
+Partner hosts are illustrative; OMG's table and topic are from `config/dev.yml`. OMG's
+recorded place-order flow gives the 26 operations of `PLACE_ORDER_OPERATIONS` in
+`tests/unit/test_operation_names.py`, such as `DynamoDB.TransactWriteItems`,
+`SNS.Publish omg-springfield-events-dev`, `GET warbyparker.okta.com/api/v1/users`, and
+`sf-publisher.process_work_unit`.
 
 | Inputs | `operation` |
 |--------|-------------|
@@ -437,30 +550,41 @@ logs every URL at `INFO`.
 
 The canary rule and the logging rules of [tentacle.md](tentacle.md#privacy) hold on every path
 here: a value planted in a body, URL, header, span attribute, span event, or link reaches no
-observation, count, or log line. Span mapping emits only `SpanObservation` fields. Client-span
-bodies and the proxy emit only `ShapeObservation`s: channel, ids, timestamps, shape, and
-fingerprint. Capture events emit nothing; their index stays in memory. The proxy's added
-`traceparent` holds only random ids and goes only to the upstream. Every path emits counts
-per source and reason.
+observation, count, or log line. `parse_traces` decodes only allowlisted values, and
+`RawSpan`'s `repr` leaves out the bodies, the URL, and the messaging destinations. Span mapping
+emits only `SpanObservation` fields. Client-span bodies and the proxy emit only
+`ShapeObservation`s: channel, ids, timestamps, shape, and fingerprint. The receiver's error
+bodies are fixed texts. The proxy's added `traceparent` holds only random ids and goes only to
+the upstream. Every path emits counts per source and reason.
 
 Strings copied into observations come from code or infrastructure: `service.name`, span names
 (rule 5), `http.route`, OpenAPI templates, hosts, path literals, `rpc.*`, and resource names.
 The harness plants values everywhere else. A span name built from a payload value would pass
 rule 5; OMG builds its names from code (`{processor_name}.process_work_unit`), and the L1
-canary run on recorded spans would catch a system that does not.
+canary run on recorded spans (`test_recorded_spans_canary`) would catch a system that does not.
 
 ## Tests
 
+The L1 recordings are `tests/fixtures/omg/otlp/place_order_1/` and `place_order_2/`: what OMG's
+collector exported, one file per request, while OMG's `test_order_payload.json` was placed with
+fresh order ids, as `make test-order` posts it (`scripts/call_order_api.py`); with the committed
+ids OMG returns the order it already placed and starts no listener. `dev/omg/record_otlp.py`
+recorded them and replaced every value outside the allowlist with a placeholder of its type, so
+the keys stay; URLs lost their query values. Each holds the place-order flow, 15 spans in the
+API's trace and 15 in the listener's, and 12 spans of sf-publisher retrying an earlier work unit
+whose Helios call staging refused. `tests/otlp_json.py` builds synthetic OTLP JSON.
+
 | Step | Level | Proves |
 |------|-------|--------|
-| 1.4 | L0 | Every field and allowlist row; canaries in dropped attributes, the query, headers, both bodies, `status.message`, exception events, and link attributes reach no observation or log; each body outcome and rejection; gzip; `415`, `400`, `503`; a resent batch gives the same ids |
-| 1.4 | L1 | OTLP JSON recorded from `make test-order`: the `SERVER` span of `POST /v1/orders/place_order` and its DynamoDB and SNS children share one `trace_id` |
-| 1.4 | L2 | Live `make test-order` delivers those spans; Jaeger receives every trace, also with the tentacle stopped |
-| 1.5 | L0 | The examples; each id rule alone with near misses (15 hex digits, 25 base32 characters); the strings that pass every rule; template specificity; `{unlisted}`; `operations` validation |
-| 1.5 | L1 | Two recordings of the same OMG targets give the same operation names; canary ids in path positions never appear |
+| 1.4 | L0 | `tests/unit/test_span_pipeline.py`: every field, each rejection and its order, links, status and error, each body outcome, the `none` channel, sampling, a resent span gives the same ids, no body value in an observation. `test_otlp_receiver.py`: the allowlist, stable names before old ones, kinds and statuses as integers or names, leaves of the wrong type, malformed containers; `200`, partial success, gzip, `503` with `Retry-After`, each `415`, `400`, and `413`, `404`, `405`, a failing sink; canaries in dropped attributes, the query, headers, `status.message`, events, links, and resource attributes reach no `RawSpan` or log. Runner cases in `test_tentacle_runner.py` (counted and sent, a batch that does not fit, a failing receiver, the listen address, a busy port), sender cases in `test_tentacle_sender.py`, and the `otlp` cases of `test_system_config.py` |
+| 1.4 | Integration | `tests/integration/test_tentacle_otlp.py`: OTLP JSON through the tentacle into the body gives spans and outbound request and response channels, and a resent batch only duplicates; the canary, with OMG's order fixture in both bodies |
+| 1.4 | L1 | `test_tentacle_otlp.py`: in each recording, the `SERVER` span of `POST /v1/orders/place_order` and its DynamoDB children share one `trace_id`; the listener's span starts another trace and links to that `SERVER` span, and its SNS `producer` span is its child. The canary planted in every scrubbed value, query value, status message, and URL path of a recording reaches nothing |
+| 1.4 | L2 | `tests/integration/test_tentacle_otlp_omg.py`: a fresh order with canaries in its ids, names, email, and address reaches the receiver as that flow, with no canary in what the tentacle sends or logs, and Jaeger holds every trace the receiver got; with nothing on the receiver's port, Jaeger still gets a new order's trace |
+| 1.5 | L0 | `tests/unit/test_operation_names.py`: the examples; each id rule alone with near misses (15 hex digits, 25 base32 characters); the strings that pass every rule; percent-decoding; span names; methods; hosts, ports, and paths; rule order; AWS resources; template specificity; `{unlisted}`; the length limit; `operations` validation; canary ids in path positions never appear |
+| 1.5 | L1 | `test_operation_names.py`: the two recordings give the same operation names, `PLACE_ORDER_OPERATIONS` |
 | 1.6 | L0 | `tests/unit/test_http_proxy.py`, a fake FastAPI upstream: byte-for-byte transparency for JSON, non-JSON, gzip, empty, chunked, streamed, and oversized bodies, a chunked request, and `HEAD`, also with a sink that raises; `502` both ways; `traceparent` added, kept, and kept when invalid or repeated; hop-by-hop headers; unmatched routes, templates loaded late, a failed refresh; `501`; client and upstream aborts; canaries in path, query, headers, and bodies. `test_exchange_pipeline.py`: each row of [Shapes](#shapes), sampling, the fields. `test_route_template.py`: parsing and specificity |
 | 1.6 | L1 | `test_openapi_routes.py` against `tests/fixtures/omg/openapi/` (the `paths` and operation ids of both services' `/openapi.json`): a concrete path per route maps to its template; a literal beats a parameter. `tests/integration/test_tentacle_proxy.py`: OMG's order fixture through the proxy to a fake upstream and into the body gives request and response channels, warm-up variants then a drifted copy notify once, and the canary |
-| 1.6 | L2 | `tests/integration/test_tentacle_proxy_omg.py`: OMG's order payloads posted through the proxy give request and response channels for `POST /v1/orders/place_order` whose span id is the parent of OMG's `SERVER` span in Jaeger, and `/openapi.json` crosses the proxy unchanged. `test_openapi_routes.py` checks the fixtures still match the live documents |
+| 1.6 | L2 | `tests/integration/test_tentacle_proxy_omg.py`: OMG's order payloads posted through the proxy give request and response channels for `POST /v1/orders/place_order` whose span id is the parent of OMG's `SERVER` span, as the tentacle's own receiver gets it (step 1.4 moved this check from Jaeger into FIRE), and `/openapi.json` crosses the proxy unchanged. `test_openapi_routes.py` checks the fixtures still match the live documents |
 
 L3 waits on open questions 1 and 2.
 
@@ -477,5 +601,10 @@ L3 waits on open questions 1 and 2.
    hostname through the proxy, or FIRE posts OMG's payloads itself; step 1.10 assumes the
    first.
 4. Which call a capture belongs to: OMG records `transmission.capture` on the `CLIENT` span's
-   parent, so a processor span with several partner calls holds several captures.
-5. Whether the receiver and the proxy need a token once they listen beyond the loopback.
+   parent, so a processor span with several partner calls holds several captures. The recorded
+   flow shows it: the event is on `sf-publisher.business_logic`, not on the Helios `POST`.
+5. Whether the receiver and the proxy need a token once they listen beyond the loopback. On
+   Linux the receiver listens on `0.0.0.0:4318`, reachable from the local network.
+6. `make test-order` always posts the same order, so after its first run OMG answers from its
+   idempotency record and starts no listener. The L1 recordings and the L2 test post the same
+   payload with fresh ids instead; step 1.10 needs one of them, or a FIRE target that does it.

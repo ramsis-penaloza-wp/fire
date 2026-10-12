@@ -16,7 +16,7 @@ from typing import NamedTuple
 # `{METHOD} {template}` must fit a channel name, at most 256 characters.
 MAX_TEMPLATE_LENGTH = 240
 
-_PLACEHOLDER = re.compile(r"\{[A-Za-z_][A-Za-z0-9_.-]*\}")
+PLACEHOLDER = re.compile(r"\{[A-Za-z_][A-Za-z0-9_.-]*\}")
 _LITERAL = re.compile(r"[^{}\s\x00-\x1f\x7f-\x9f]*")
 
 
@@ -41,7 +41,7 @@ class RouteTemplate:
             raise ValueError(f"a route template has at most {MAX_TEMPLATE_LENGTH} characters")
         literals: list[str | None] = []
         for segment in template.split("/")[1:]:
-            if _PLACEHOLDER.fullmatch(segment):
+            if PLACEHOLDER.fullmatch(segment):
                 literals.append(None)
             elif _LITERAL.fullmatch(segment):
                 literals.append(segment)
@@ -71,6 +71,19 @@ class Route(NamedTuple):
     template: RouteTemplate
 
 
+def best_template(
+    templates: Iterable[RouteTemplate], segments: Sequence[str]
+) -> RouteTemplate | None:
+    """Among the templates that match `segments`, the lowest `rank`; between equal ranks, the
+    first given. None when none matches.
+    """
+    best: RouteTemplate | None = None
+    for template in templates:
+        if template.matches(segments) and (best is None or template.rank < best.rank):
+            best = template
+    return best
+
+
 class RouteTable:
     """Templates by method, uppercase. A request matches on its method, exactly, and its path.
 
@@ -91,9 +104,5 @@ class RouteTable:
         candidates = self._routes.get(method)
         if not candidates or not path.startswith("/"):
             return None
-        segments = path.split("/")[1:]
-        best: RouteTemplate | None = None
-        for template in candidates:
-            if template.matches(segments) and (best is None or template.rank < best.rank):
-                best = template
+        best = best_template(candidates, path.split("/")[1:])
         return None if best is None else best.template

@@ -1,0 +1,37 @@
+# OMG's docker/local/otel-collector-config.yml, plus `otlp_http/fire` in the traces pipeline.
+# Jaeger (`otlp`) and `debug` stay: FIRE's exporter is added, never substituted. Collector
+# images from before `otlphttp` was renamed `otlp_http` (0.157 accepts both) need the old name.
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: "0.0.0.0:55680"
+      http:
+        endpoint: "0.0.0.0:55681"
+
+
+exporters:
+  otlp:
+    endpoint: warby-jaeger:4317
+    tls:
+      insecure: true
+  prometheus:
+    endpoint: "warby-otel-collector:8889"
+  debug:
+    verbosity: detailed
+    sampling_initial: 5
+    sampling_thereafter: 200
+  # The tentacle's OTLP receiver, OMG_OTLP_LISTEN=127.0.0.1:4318; /v1/traces is appended.
+  otlp_http/fire:
+    endpoint: http://host.docker.internal:4318
+    encoding: json
+    compression: none
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      exporters: [otlp, debug, otlp_http/fire]
+    metrics:
+      receivers: [otlp]
+      exporters: [prometheus, debug]

@@ -12,6 +12,7 @@ from pydantic import ValidationError
 from fire.apps.config import (
     EventSourceConfig,
     HttpProxySourceConfig,
+    OtlpSourceConfig,
     ReplaySourceConfig,
     S3CaptureSourceConfig,
     SystemConfig,
@@ -46,11 +47,15 @@ def test_template_is_a_valid_system_config() -> None:
     config = SystemConfig.model_validate(yaml.safe_load(TEMPLATE.read_text()))
     assert config.notify.slack.channel_id == "C0123456789"
     assert config.discovery.manifest is not None
-    [source] = config.sources
+    traces, source = config.sources
+    assert isinstance(traces, OtlpSourceConfig)
+    assert traces.location_env == "EXAMPLE_OTLP_LISTEN"
     assert source.id == "domain-events"
     assert source.kind == "kinesis"
     assert isinstance(source, EventSourceConfig)
     assert source.envelope.event_id.path == "work_unit_id"
+    [rule] = config.operations.http
+    assert (rule.hosts, rule.alias) == (["*.partner.example.com"], "partner")
 
 
 @pytest.mark.unit
@@ -58,6 +63,7 @@ def test_repo_system_configs_are_valid() -> None:
     configs = load_system_configs(SYSTEMS)
     assert "omg" in configs
     assert configs["omg"].source_ids() == {
+        "omg-traces",
         "omg-api",
         "omg-validation",
         "domain-events",
@@ -90,6 +96,7 @@ def test_minimal_config_defaults() -> None:
     assert config.notify.slack.channel_name is None
     assert config.discovery.manifest is None
     assert config.sources == []
+    assert config.operations.http == []
     assert config.policy.critical == []
     assert config.fingerprinting.sample_rate == 1.0
 
@@ -249,6 +256,7 @@ SOURCES: dict[str, tuple[dict[str, Any], str]] = {
     ),
     "s3_capture": ({"kind": "s3_capture", "bucket_env": "B", "captures": [CAPTURE]}, "B"),
     "http_proxy": ({"kind": "http_proxy", "listen_port": 8021, "upstream_env": "U"}, "U"),
+    "otlp": ({"kind": "otlp", "listen_env": "L"}, "L"),
 }
 
 
@@ -423,6 +431,66 @@ def test_omg_proxies_sit_in_front_of_the_api_and_the_validation_engine() -> None
         "omg-api": (8120, "OMG_API_UPSTREAM"),
         "omg-validation": (8130, "OMG_VALIDATION_UPSTREAM"),
     }
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [
+        ("listen_env", ""),
+        ("listen_port", 4318),
+        ("listen_host", "0.0.0.0"),
+        ("direction", "inbound"),
+        ("envelope", ENVELOPE),
+        ("capture_event", {"name": "transmission.capture"}),
+    ],
+)
+def test_otlp_checks_its_keys(key: str, value: Any) -> None:
+    locs = _source_error_locs(_source("otlp", **{key: value}))
+    assert locs == [("sources", 0, "otlp", key)]
+
+
+@pytest.mark.unit
+def test_otlp_needs_a_listen_env() -> None:
+    source = _source("otlp")
+    del source["listen_env"]
+    assert _source_error_locs(source) == [("sources", 0, "otlp", "listen_env")]
+
+
+@pytest.mark.unit
+def test_omg_receives_its_collectors_spans() -> None:
+    sources = {source.id: source for source in load_system_configs(SYSTEMS)["omg"].sources}
+    traces = sources["omg-traces"]
+    assert isinstance(traces, OtlpSourceConfig)
+    assert traces.location_env == "OMG_OTLP_LISTEN"
+
+
+@pytest.mark.unit
+def test_operations_load_from_the_system_yaml() -> None:
+    rule = {"hosts": ["api.partner.example.com"], "alias": "partner", "paths": ["/v1/{id}"]}
+    config = SystemConfig.model_validate(_minimal(operations={"http": [rule]}))
+    assert config.operations.http[0].paths == ["/v1/{id}"]
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("operations", "loc"),
+    [
+        ({"grpc": []}, ("operations", "grpc")),
+        ({"http": [{"hosts": ["a.example"], "alias": "A"}]}, ("operations", "http", 0, "alias")),
+        (
+            {"http": [{"hosts": ["a.example"], "alias": "a", "paths": ["/x", "/x"]}]},
+            ("operations", "http", 0, "paths"),
+        ),
+    ],
+    ids=["unknown-key", "alias", "duplicate-template"],
+)
+def test_operations_errors_name_their_location(
+    operations: dict[str, Any], loc: tuple[str | int, ...]
+) -> None:
+    with pytest.raises(ValidationError) as caught:
+        SystemConfig.model_validate(_minimal(operations=operations))
+    assert [error["loc"] for error in caught.value.errors()] == [loc]
 
 
 @pytest.mark.unit
