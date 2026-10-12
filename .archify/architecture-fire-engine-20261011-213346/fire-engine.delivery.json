@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "f855781c-0328-42ef-ae17-5c6e2700af2d",
+  "status": "current",
+  "command": "deliver",
+  "type": "architecture",
+  "input": "/Users/ramsis.penaloza/Desktop/Proyects/fire/.archify/architecture-fire-engine-20261011-213346/candidate.json",
+  "output": "/Users/ramsis.penaloza/Desktop/Proyects/fire/.archify/architecture-fire-engine-20261011-213346/fire-engine.html",
+  "specification": {
+    "sha256": "9142b22a7f8fb43f552be9f076a74540b979ae512242b1b76696c504339c1acd",
+    "bytes": 10850
+  },
+  "artifact": {
+    "sha256": "a8d901804b9aa433ac18cb36f2832d6198b607404ead098a9c49fa7fcd764f60",
+    "bytes": 790002
+  }
+}

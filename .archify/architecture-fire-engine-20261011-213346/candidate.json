@@ -1,0 +1,203 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "FIRE ENGINE: shapes in, diagnoses out",
+    "locale": "en",
+    "output": ".archify/architecture-fire-engine-20261011-213346/fire-engine.html",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/ramsis-penaloza-wp/fire.git",
+      "revision": "910aaba2af5c4ba907cb030430ad515ca2d94fbe"
+    }
+  },
+  "components": [
+    {
+      "id": "upstream", "type": "external", "label": "Watched services",
+      "sublabel": "OMG API · validation engine", "pos": [320, 40], "size": [180, 64],
+      "sources": [{ "path": "config/systems/omg.yml", "line": 26, "end_line": 31, "label": "http_proxy upstreams" }]
+    },
+    {
+      "id": "clients", "type": "external", "label": "API clients",
+      "sublabel": "call the proxy port", "pos": [40, 180], "size": [150, 64],
+      "sources": [{ "path": "config/systems/omg.yml", "line": 26, "end_line": 28, "label": "post to the proxy port" }]
+    },
+    {
+      "id": "collector", "type": "external", "label": "OTel collector",
+      "sublabel": "OMG · otlp_http/fire", "pos": [40, 320], "size": [150, 64],
+      "sources": [{ "path": "dev/omg/otel-collector-config.yml", "line": 24, "end_line": 34, "label": "extra exporter" }]
+    },
+    {
+      "id": "replay-files", "type": "database", "label": "Sample payloads",
+      "sublabel": "*_work_unit.json", "pos": [40, 460], "size": [150, 64],
+      "sources": [{ "path": "config/systems/omg.yml", "line": 83, "end_line": 90, "label": "replay source" }]
+    },
+    {
+      "id": "http-proxy", "type": "backend", "label": "HttpProxy",
+      "sublabel": "inbound reverse proxy", "pos": [320, 180], "size": [180, 64],
+      "sources": [
+        { "path": "fire/adapters/sources/http_proxy.py", "line": 71, "end_line": 79, "label": "contract" },
+        { "path": "fire/adapters/sources/http_proxy.py", "line": 138, "end_line": 165, "label": "route templates" },
+        { "path": "fire/adapters/sources/http_proxy.py", "line": 297, "end_line": 318, "label": "forward upstream" }
+      ]
+    },
+    {
+      "id": "otlp", "type": "backend", "label": "OtlpReceiver",
+      "sublabel": "POST /v1/traces", "pos": [320, 320], "size": [180, 64],
+      "sources": [
+        { "path": "fire/adapters/sources/otlp.py", "line": 86, "end_line": 93, "label": "contract" },
+        { "path": "fire/adapters/sources/otlp.py", "line": 137, "end_line": 177, "label": "request handling" }
+      ]
+    },
+    {
+      "id": "replay", "type": "backend", "label": "ReplayRecordSource",
+      "sublabel": "replay · file reader", "pos": [320, 460], "size": [180, 64],
+      "sources": [
+        { "path": "fire/adapters/sources/replay.py", "line": 16, "end_line": 33, "label": "reader" },
+        { "path": "fire/apps/tentacle/sources.py", "line": 33, "end_line": 42, "label": "READERS" }
+      ]
+    },
+    {
+      "id": "pipelines", "type": "backend", "label": "Shape pipelines",
+      "sublabel": "Exchange · Span · Record", "tag": "shapes, never values",
+      "pos": [600, 320], "size": [190, 64],
+      "sources": [
+        { "path": "fire/core/services/exchange_pipeline.py", "line": 69, "end_line": 77, "label": "ExchangePipeline" },
+        { "path": "fire/core/services/span_pipeline.py", "line": 97, "end_line": 104, "label": "SpanPipeline" },
+        { "path": "fire/core/services/record_pipeline.py", "line": 115, "end_line": 122, "label": "RecordPipeline" }
+      ]
+    },
+    {
+      "id": "sender", "type": "messagebus", "label": "Queue + Sender",
+      "sublabel": "batches · retries", "pos": [900, 320], "size": [160, 64],
+      "sources": [
+        { "path": "fire/apps/tentacle/runner.py", "line": 305, "end_line": 312, "label": "queue and sender" },
+        { "path": "fire/apps/tentacle/sender.py", "line": 47, "end_line": 56, "label": "batching contract" },
+        { "path": "fire/apps/tentacle/sender.py", "line": 107, "end_line": 142, "label": "post with retries" }
+      ]
+    },
+    {
+      "id": "api", "type": "backend", "label": "FIRE ENGINE API",
+      "sublabel": "FastAPI · 202 at T=0", "tag": "X-FIRE-Token", "pos": [900, 660], "size": [160, 64],
+      "sources": [
+        { "path": "fire/apps/incident_engine/app.py", "line": 85, "end_line": 96, "label": "token check" },
+        { "path": "fire/apps/incident_engine/app.py", "line": 108, "end_line": 153, "label": "POST /v0/observations" }
+      ]
+    },
+    {
+      "id": "ingest", "type": "backend", "label": "IngestService",
+      "sublabel": "check · store · count", "pos": [600, 660], "size": [190, 64],
+      "sources": [
+        { "path": "fire/core/services/ingest.py", "line": 25, "end_line": 32, "label": "checks" },
+        { "path": "fire/core/services/ingest.py", "line": 45, "end_line": 84, "label": "ingest and drift hook" }
+      ]
+    },
+    {
+      "id": "catalog", "type": "database", "label": "Observation catalog",
+      "sublabel": "in-memory · baselines · drift", "tag": "lost on restart",
+      "pos": [600, 820], "size": [190, 64],
+      "sources": [
+        { "path": "fire/adapters/memory/observation_catalog.py", "line": 66, "end_line": 97, "label": "add_shape" },
+        { "path": "fire/core/domain/baseline.py", "line": 106, "end_line": 138, "label": "admit: fold or drift" }
+      ]
+    },
+    {
+      "id": "drift", "type": "backend", "label": "DriftIncidentService",
+      "sublabel": "incident + dossier", "pos": [320, 660], "size": [190, 64],
+      "sources": [
+        { "path": "fire/core/services/drift_incident.py", "line": 23, "end_line": 69, "label": "open_shape_drift" },
+        { "path": "fire/apps/incident_engine/app.py", "line": 137, "end_line": 142, "label": "on_drift hook" }
+      ]
+    },
+    {
+      "id": "discovery", "type": "backend", "label": "Discovery",
+      "sublabel": "manifest → inventory", "tag": "event_chains_graph", "pos": [40, 660], "size": [180, 64],
+      "sources": [
+        { "path": "fire/apps/discovery.py", "line": 38, "end_line": 60, "label": "discover" },
+        { "path": "fire/apps/incident_engine/wiring.py", "line": 96, "end_line": 105, "label": "coverage scopes" }
+      ]
+    },
+    {
+      "id": "reasoner", "type": "backend", "label": "EchoReasoner",
+      "sublabel": "dossier → Decision", "tag": "stub", "pos": [320, 980], "size": [190, 64],
+      "sources": [
+        { "path": "fire/core/services/diagnosis.py", "line": 14, "end_line": 29, "label": "DiagnosisService" },
+        { "path": "fire/adapters/reasoners/echo.py", "line": 61, "end_line": 69, "label": "EchoReasoner" },
+        { "path": "fire/apps/incident_engine/wiring.py", "line": 67, "end_line": 91, "label": "v0 providers" }
+      ]
+    },
+    {
+      "id": "narrator", "type": "backend", "label": "TemplateNarrator",
+      "sublabel": "Decision → prose", "tag": "stub", "pos": [600, 980], "size": [190, 64],
+      "sources": [{ "path": "fire/adapters/narrators/template.py", "line": 10, "end_line": 40, "label": "narrate" }]
+    },
+    {
+      "id": "notifier", "type": "backend", "label": "ConsoleNotifier",
+      "sublabel": "prints to stdout", "tag": "stub", "pos": [900, 980], "size": [160, 64],
+      "sources": [{ "path": "fire/adapters/notifiers/console.py", "line": 12, "end_line": 23, "label": "publish" }]
+    }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "Tentacle process", "wraps": ["http-proxy", "otlp", "replay", "pipelines", "sender"] },
+    { "kind": "region", "label": "FIRE ENGINE body", "wraps": ["api", "ingest", "catalog", "drift", "discovery", "reasoner", "narrator", "notifier"] }
+  ],
+  "connections": [
+    { "id": "clients-to-proxy", "from": "clients", "to": "http-proxy", "label": "HTTP" },
+    { "id": "proxy-to-upstream", "from": "http-proxy", "to": "upstream", "label": "forward · /openapi.json" },
+    { "id": "collector-to-otlp", "from": "collector", "to": "otlp", "label": "OTLP/HTTP JSON" },
+    { "id": "files-to-replay", "from": "replay-files", "to": "replay", "label": "read .json/.jsonl" },
+    { "id": "proxy-to-pipelines", "from": "http-proxy", "to": "pipelines", "label": "HttpExchange" },
+    { "id": "otlp-to-pipelines", "from": "otlp", "to": "pipelines", "label": "RawSpan" },
+    { "id": "replay-to-pipelines", "from": "replay", "to": "pipelines", "label": "RawRecord" },
+    { "id": "pipelines-to-sender", "from": "pipelines", "to": "sender", "label": "observations" },
+    { "id": "sender-to-api", "from": "sender", "to": "api", "label": "POST /v0/observations", "variant": "emphasis" },
+    { "id": "api-to-ingest", "from": "api", "to": "ingest", "label": "batch" },
+    { "id": "ingest-to-catalog", "from": "ingest", "to": "catalog", "label": "store + admit" },
+    { "id": "ingest-to-drift", "from": "ingest", "to": "drift", "label": "on_drift", "variant": "emphasis" },
+    { "id": "catalog-to-drift", "from": "catalog", "to": "drift", "label": "read streams", "variant": "dashed" },
+    { "id": "discovery-to-drift", "from": "discovery", "to": "drift", "label": "coverage", "variant": "dashed" },
+    { "id": "drift-to-reasoner", "from": "drift", "to": "reasoner", "label": "dossier · background task", "variant": "emphasis" },
+    { "id": "reasoner-to-narrator", "from": "reasoner", "to": "narrator", "label": "Decision" },
+    { "id": "narrator-to-notifier", "from": "narrator", "to": "notifier", "label": "Narration" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Shapes and drift",
+      "items": [
+        "Pipelines turn JSON into a Shape and a SHA-256 fingerprint; values never leave the tentacle",
+        "The engine recomputes each fingerprint and rejects a mismatch",
+        "A stream is warm after drift.min_samples (20 for OMG)",
+        "A new fingerprint on a warm stream that adds, retypes, or drops a required field raises one signal; repeats only count"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Engine API",
+      "items": [
+        "POST /v0/observations: 202 with an ingest report",
+        "POST /v0/diagnose: 202, a caller's dossier runs the same diagnosis",
+        "GET /v0/systems/{system}/streams: baselines and drift signals",
+        "Every /v0 route needs X-FIRE-Token: 401 when wrong, 503 when unset"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Diagnosis in v0",
+      "items": [
+        "DiagnosisService runs reasoner, then narrator, then notifier",
+        "Only echo, template, and console are wired; other providers fail at startup",
+        "Evidence it cannot build is a MISSING fragment, never a guess"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "Config, not code",
+      "items": [
+        "config/fire.yml: token env var, providers, tentacle batching",
+        "config/systems/<system>.yml: sources, manifest, drift policy",
+        "Kinesis, DynamoDB stream, SNS, and S3 sources are declared but have no reader yet"
+      ]
+    }
+  ]
+}
