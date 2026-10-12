@@ -1,4 +1,4 @@
-"""OMG's four WorkUnit samples, replayed through omg.yml's replay source into the body."""
+"""OMG's five WorkUnit samples, replayed through omg.yml's replay source into the body."""
 
 from __future__ import annotations
 
@@ -27,6 +27,7 @@ HEADERS = {"X-FIRE-Token": TOKEN}
 EVENT_TYPES = [
     "fulfillment.allocated",
     "fulfillment.receive",
+    "order.charged",
     "payments.ar_refund_ack",
     "payments.oracle_refund_initiated",
 ]
@@ -65,7 +66,7 @@ def _streams() -> list[dict[str, Any]]:
 
 
 @pytest.mark.integration
-def test_work_unit_samples_give_four_event_channels_of_one_sample(fire_yml: Path) -> None:
+def test_work_unit_samples_give_five_event_channels_of_one_sample(fire_yml: Path) -> None:
     assert _replay(fire_yml, FIXTURES) == EXIT_OK
 
     streams = _streams()
@@ -88,8 +89,8 @@ def test_second_replay_adds_only_duplicates(
 
     assert _streams() == first
     assert (
-        "source=work-unit-samples read=4 built=4 sent=4 unsent=0 pending=0 rejected=- "
-        "skipped=- noted=- body_duplicate=4 body_rejected=-"
+        "source=work-unit-samples read=5 built=5 sent=5 unsent=0 pending=0 rejected=- "
+        "skipped=- noted=- body_duplicate=5 body_rejected=-"
     ) in caplog.text
 
 
@@ -113,7 +114,7 @@ def test_omg_repo_samples_match_the_fixtures(
     # The whole directory, as dev/omg/README.md runs it: its API bodies count as rejected.
     assert _replay(fire_yml, payloads) == EXIT_OK
     assert "source=work-unit-samples" in caplog.text
-    assert "built=4 sent=4 unsent=0 pending=0 rejected=missing_event_id:" in caplog.text
+    assert "built=5 sent=5 unsent=0 pending=0 rejected=missing_event_id:" in caplog.text
     from_omg = _fingerprints()
 
     app_module._container = build_container(fire_yml)

@@ -63,7 +63,7 @@ Checked against `order-management-gateway`:
 - The manifest declares payload fields by their snake_case Python names with Python types
   (`allocated_items: list[AllocatedItem]`), top level only. The Kinesis payload uses
   camelCase (`allocatedItems`).
-- `scripts/test_payloads/` holds four `WorkUnit` samples (snake_case, internal form). The
+- `scripts/test_payloads/` holds five `WorkUnit` samples (snake_case, internal form). The
   other files there are API request bodies, not events.
 
 ## Phase 0: repo rules and OMG config

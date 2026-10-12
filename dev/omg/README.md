@@ -160,7 +160,7 @@ OMG_API_UPSTREAM=http://localhost:8020 OMG_VALIDATION_UPSTREAM=http://localhost:
 
 The replay alone needs neither OMG's stack nor AWS. It reads OMG's `WorkUnit` samples, logs
 `rejected=missing_event_id:<n>` for the API bodies in the same directory, and exits `0` once
-everything is sent; `/streams` then lists four `event:internal:…:payload` channels:
+everything is sent; `/streams` then lists five `event:internal:…:payload` channels:
 
 ```bash
 cd "$FIRE_REPO"
@@ -202,7 +202,7 @@ request or response shapes. Run them from `$OMG_REPO`.
 | `make test-order` | `POST /v1/orders/place_order` with `test_order_payload.json` |
 | `make test-order-springfield` | Same with `test_springfield_order_payload.json`, an order placed into Springfield (Helios) |
 | `make test-order-custom PAYLOAD=<file>` | Same with any file in `scripts/test_payloads/` |
-| `make test-sales-order-processor` | `sales_order_processor` Lambda with the `fulfillment.allocated` WorkUnit; `batchItemFailures` without a matching order |
+| `make test-sales-order-processor` | `sales_order_processor` Lambda with the `order.charged` WorkUnit; `batchItemFailures` without a matching order |
 | `make test-fulfillment-processor` | `order-management-gateway-fulfillment-processor` with the `fulfillment.receive` WorkUnit |
 | `make test-oracle-publisher PAYLOAD=<file>` | `order-management-gateway-oracle-publisher`; `PAYLOAD` is required |
 
@@ -249,9 +249,10 @@ curl -s -H "$H" http://127.0.0.1:8000/v0/systems/omg/streams | jq .
 curl -s -H "$H" http://127.0.0.1:8000/v0/systems/omg/paths | jq .
 ```
 
-- TODO(1.10): choose a WorkUnit for `test-oracle-publisher`. None of OMG's four committed
-  samples (`fulfillment.allocated`, `fulfillment.receive`, `payments.ar_refund_ack`,
-  `payments.oracle_refund_initiated`) is an event `oracle-publisher` consumes in the manifest.
+- TODO(1.10): choose a WorkUnit for `test-oracle-publisher`. None of OMG's five committed
+  samples (`fulfillment.allocated`, `fulfillment.receive`, `order.charged`,
+  `payments.ar_refund_ack`, `payments.oracle_refund_initiated`) is an event `oracle-publisher`
+  consumes in the manifest.
 - `/streams` lists `http:inbound:POST /v1/orders/place_order:request` and `:response:2xx`,
   outbound Oracle actions, and event types.
 - `/paths` has `POST /v1/orders/place_order` reaching the DynamoDB write, the listener, SNS,
