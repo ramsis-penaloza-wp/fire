@@ -4,9 +4,8 @@ The order of work for [ingest-drift-and-feedback.md](specs/ingest-drift-and-feed
 (the spec). The spec says what each part must do. This roadmap cuts it into steps, one pull
 request each, and says for every step what must work, how it is tested, and against what.
 
-Phase 0 is done (repo rules and `config/systems/omg.yml`), and so are steps 1.1 to 1.6, 2.1,
-2.2, and 2.4 for shape drift; its path drift parts land with steps 1.9 and 2.3. Phases 1 to 4
-keep the spec's numbering.
+Phase 0 is done (repo rules and `config/systems/omg.yml`), and so are steps 1.1 to 1.6, 1.9,
+and 2.1 to 2.4. Phases 1 to 4 keep the spec's numbering.
 
 **Scope added here.** The tentacle intercepts everything that enters and leaves OMG, not only
 Kinesis domain events: inbound HTTP, inbound external events, internal domain events, outbound
@@ -358,6 +357,14 @@ paths, shapes on flows, and the paths endpoint.
 **Test.** L0 synthetic span trees, including links and late spans. L1 the recorded
 place-order trace. L2 live.
 
+**Shipped** with step 2.3, whose incidents need the flow's `ProcessPath`. The recorded
+place-order flow gives one path of 27 nodes and 26 edges, the listener joined by its link; its
+process path has 29 hops. The body completes settled flows every second and before `/paths`,
+on a clock tests inject. At L2, a fresh order's spans reached the body over 28.9, 8.8, and 1.9
+seconds in three runs, so `settle_s: 60` stays. A shape that arrives before its trace's first
+span waits for it, so the proxy's shapes never make OMG's spans late. Shape drift dossiers keep
+their missing `process_path`: the incident opens before its shape's flow can complete.
+
 ### 1.10 Phase 1 exit run
 
 **Delivers.** One procedure in
@@ -438,7 +445,14 @@ possibilities ship in 2.4.
 - Incomplete flows produce none.
 - Several new signals from one flow give one notification.
 
-**Test.** L0. L1 with the recorded place-order trace minus its Oracle call.
+**Test.** L0. L1 with the recorded place-order trace minus its Helios call.
+
+**Shipped** with step 1.9. The local place-order flow reaches sf-publisher's Helios call and no
+Oracle call, so the L1 case removes the Helios call. Staging refuses that call in every flow, so
+`hop_failing` is tested on the payments call instead. A path drift dossier has no missing
+fragment, so `EchoReasoner` decides at `0.45` and not `noul`; it also makes each of the flow's 28
+hops a possibility, which leaves the drift one at 3%
+([flows-and-paths.md, open question 8](specs/flows-and-paths.md#open-questions)).
 
 ### 2.4 Drift incidents
 
@@ -462,8 +476,8 @@ possibilities ship in 2.4.
 - Path drift parts that need no flows: the `path_drift` trigger, `EchoReasoner`'s `path_drift`
   possibilities, and `via` on edge hops of `ProcessHop`.
 
-**Moved.** The mapping from a flow to the dossier's `ProcessPath` is delivered by
-[1.9](#19-trace-assembly-and-paths), and opening path drift incidents by
+**Moved**, and now shipped: the mapping from a flow to the dossier's `ProcessPath` by
+[1.9](#19-trace-assembly-and-paths), and opening path drift incidents with their dossier by
 [2.3](#23-path-drift).
 
 **Done when:**
@@ -505,14 +519,16 @@ observed. Contract drift stays optional.
   removed path, and the type change.
 - L1, outbound: replaying a capture fixture whose Oracle response lost a field raises one
   notification for that partner action.
-- L1, path: replaying the place-order trace without its Oracle call raises one path drift
+- L1, path: replaying the place-order trace without its Helios call raises one path drift
   notification.
 
 **Test.** L2 and L1 as above, with the notifications in the pull request.
 
 **Inbound part run.** The L2 inbound bullet passes with what 1.6, 2.1, 2.2, and 2.4 shipped:
 [e. Drift demo](../dev/omg/README.md#e-drift-demo-step-26) has the commands and the
-notification. The L1 bullets wait on 1.7, 1.9, and 2.3.
+notification. The L1 outbound bullet waits on 1.7. The L1 path bullet's behavior is step 2.3's
+L1 test (`tests/integration/test_place_order_paths.py`); its corpus and replay command are still
+this step's.
 
 ## Phase 3: triggers
 

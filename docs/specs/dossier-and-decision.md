@@ -28,7 +28,7 @@ and `status` are optional context and never identify the hop.
 span link. It is optional and set on edge hops only. Like the context fields, it never
 identifies the hop and `display_label()` ignores it.
 [Process path in the dossier](flows-and-paths.md#process-path-in-the-dossier) says which flow
-edges set it; step 1.9 delivers that mapping.
+edges set it; step 1.9 delivered that mapping, and path drift dossiers carry it (step 2.3).
 
 Construction raises `ValidationError` when:
 
@@ -243,7 +243,14 @@ In the L1 shape drift scenario with no manifest
 `shape_drift` fragment and missing `coverage` and `process_path` fragments: `drift-0` and
 `insufficient-evidence` at `0.5` each, `confidence` `0.2`, and `noul`.
 
+In the L1 path drift scenario, the recorded place-order flow without its Helios call
+([Path drift incidents](flows-and-paths.md#path-drift-incidents)), the dossier has 28 hops and one
+present `path_drift` fragment, and no missing one: `hop-0` to `hop-27` and `drift-0` at `1/29`
+each, `confidence` `0.45`, and `choice`.
+
 ## Follow-ups
 
 - `Dossier.incident_id`, `system`, and `service` duplicate the `Incident` that
   `DiagnosisService.run` receives alongside the dossier.
+- On a long process path, the `hop-{i}` possibilities outnumber the drift ones: 28 hops leave a
+  path drift possibility at 3% ([flows-and-paths.md, open question 8](flows-and-paths.md#open-questions)).

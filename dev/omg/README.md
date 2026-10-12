@@ -6,10 +6,11 @@ LocalStack, driven by its own `make test-*` targets and payloads, while the body
 tentacle run on the host. Nothing in the OMG repository changes: FIRE adds one compose override,
 passed with an extra `-f`, and its own collector config.
 
-**Status: partly planned.** The body runs, and so does the tentacle with its `replay` source
-(step 1.3), its OTLP receiver (step 1.4), and its inbound proxies (step 1.6), so section a, the
-L2 tests of section c, and the inbound part of the drift demo (section e) run today. Roadmap
-steps 1.7, 1.8, 1.10, and 2.6 add the other files and commands below.
+**Status: partly planned.** The body runs, with its flows and paths (steps 1.9 and 2.3), and so
+does the tentacle with its `replay` source (step 1.3), its OTLP receiver (step 1.4), and its
+inbound proxies (step 1.6), so section a, the L2 tests of section c, the `/paths` check of
+section d, and the inbound part of the drift demo (section e) run today. Roadmap steps 1.7, 1.8,
+1.10, and 2.6 add the other files and commands below.
 
 Related: [ingest spec](../../docs/specs/ingest-drift-and-feedback.md),
 [tentacle](../../docs/specs/tentacle.md), [HTTP and span capture](../../docs/specs/http-and-span-capture.md),
@@ -225,12 +226,18 @@ tentacle first. They run their own proxy on a free port and their own receiver o
 request's `SERVER` span among the spans the receiver sent; `test_tentacle_otlp_omg.py` places
 a fresh order with canaries in its customer fields, checks the flow above arrives joined and
 without a canary, that Jaeger (<http://localhost:16686>) holds every trace the receiver got,
-and that Jaeger still gets a new order's trace with nothing on the receiver's port:
+and that Jaeger still gets a new order's trace with nothing on the receiver's port.
+`test_paths_omg.py` (step 1.9) posts a fresh order with canaries through its proxy, waits until
+no span of the order's flow has arrived for 15 seconds, prints how far apart the flow's spans
+reached the body, moves the body's clock past `settle_s`, and checks that `/paths` shows the
+flow from `POST /v1/orders/place_order` across the listener's link to sf-publisher and its
+Helios call, with the proxy's shapes on the `SERVER` node and no canary:
 
 ```bash
 cd "$FIRE_REPO"
 OMG_REPO="$OMG_REPO" uv run pytest tests/integration/test_tentacle_otlp_omg.py \
-  tests/integration/test_tentacle_proxy_omg.py tests/unit/test_openapi_routes.py -m omg_local
+  tests/integration/test_tentacle_proxy_omg.py tests/integration/test_paths_omg.py \
+  tests/unit/test_openapi_routes.py -m omg_local -s
 ```
 
 The L1 recordings in `tests/fixtures/omg/otlp/` come from `record_otlp.py`, which listens where
@@ -267,7 +274,10 @@ curl -s -H "$H" http://127.0.0.1:8000/v0/systems/omg/paths | jq .
 - `/streams` lists `http:inbound:POST /v1/orders/place_order:request` and `:response:2xx`,
   outbound Oracle actions, and event types.
 - `/paths` has `POST /v1/orders/place_order` reaching the DynamoDB write, the listener, SNS,
-  the processors, and their partner calls.
+  the processors, and their partner calls, once the order's flow has settled: `paths.settle_s`
+  (60 in `omg.yml`) after its last span. Until then it counts under `open_flows`. An
+  sf-publisher retry continues its order's trace: it counts under `counters.late_spans` once
+  that flow completed, and under `counters.orphan_flows` when the body never saw the order.
 - TODO(1.10): say how `audit_coverage` runs on observed event types before `/coverage` (2.5).
 - TODO(1.10): `make test-order` repeats one order, so only its first run gives the listener's
   flow (section c); post the order with fresh ids, or add a target that does.
@@ -350,7 +360,9 @@ drifted payload's `422`, shaped differently, would notify for that channel too.
 
 L1 replays need no OMG stack. TODO(2.6): the replay commands for `corpora/outbound/` (an Oracle
 response that lost a field: one notification for that partner action) and `corpora/path/` (the
-place-order trace without its Oracle call: one path drift notification).
+place-order trace without its Helios call: one path drift notification; the local flow makes
+no Oracle call). `tests/integration/test_place_order_paths.py` already raises that notification
+from the L1 recordings.
 
 ## f. Stop and clean up
 

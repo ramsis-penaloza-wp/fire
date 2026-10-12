@@ -14,8 +14,9 @@ Model: `SystemConfig` in `fire/apps/config.py`. Contract:
 - Unknown keys fail validation at every level. A new key needs a model field, a test, and a row
   in the spec.
 - Declare decisions only: Slack target, manifest location, sources, per-host operation names
-  (`operations.http`), policy exceptions, sampling, and drift thresholds. Never list events,
-  processors, or services; discovery reads them from the manifest.
+  (`operations.http`), policy exceptions, sampling, drift thresholds, and flow settling
+  (`paths`). Never list events, processors, services, or a path's hops; discovery reads them
+  from the manifest, and paths are learned from flows.
 - `notify.slack.channel_id` is a channel id (`C…` or `G…`), never a `#name`.
 - Paths, resource names, upstreams, and machine-specific listen addresses go through env vars
   (`path_env`, `stream_env`, `table_env`, `topic_env`, `bucket_env`, `upstream_env`,
