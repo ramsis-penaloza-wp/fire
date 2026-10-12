@@ -7,8 +7,8 @@ tentacle run on the host. Nothing in the OMG repository changes: FIRE adds one c
 passed with an extra `-f`, and its own collector config.
 
 **Status: partly planned.** The body runs, and so does the tentacle with its `replay` source
-(step 1.3) and its inbound proxies (step 1.6). Roadmap steps 1.4, 1.7, 1.8, 1.10, and 2.6 add
-the other files and commands below.
+(step 1.3) and its inbound proxies (step 1.6), so the inbound part of the drift demo (section e)
+runs today. Roadmap steps 1.4, 1.7, 1.8, 1.10, and 2.6 add the other files and commands below.
 
 Related: [ingest spec](../../docs/specs/ingest-drift-and-feedback.md),
 [tentacle](../../docs/specs/tentacle.md), [HTTP and span capture](../../docs/specs/http-and-span-capture.md),
@@ -138,9 +138,13 @@ Body (exists today), on `127.0.0.1:8000` unless `FIRE_HOST` or `FIRE_PORT` say o
 ```bash
 cd "$FIRE_REPO"
 export OMG_MANIFEST_PATH="$OMG_REPO/scripts/event_chains/event_chains_graph.json"
-make run 2>&1 | tee /tmp/fire-body.log
+PYTHONUNBUFFERED=1 make run 2>&1 | tee /tmp/fire-body.log
 curl -s http://127.0.0.1:8000/health   # in another terminal: {"status":"ok"}
 ```
+
+The console notifier prints each notification to stdout, which Python buffers when it is a pipe
+or a file: without `PYTHONUNBUFFERED=1`, notifications appear only when the body stops.
+`make run` shows uvicorn's lines and the notifications, not FIRE's own `INFO` log lines.
 
 Tentacle (step 1.3; each source works once its step lands). It sends to `FIRE_BODY_URL`
 (`http://127.0.0.1:8000` in `.env.example`) with `FIRE_API_TOKEN`. Sources whose variable is
@@ -148,8 +152,8 @@ unset, or whose kind has no reader yet, are skipped with a log line. The source 
 fixed in `config/systems/omg.yml`.
 
 The inbound proxies (step 1.6) need OMG's API and validation engine up (section a without the
-collector is enough). `omg-api` listens on `:8021` in front of `:8020`, and `omg-validation`
-on `:8031` in front of `:8030`. Each fetches its upstream's `/openapi.json` and logs
+collector is enough). `omg-api` listens on `:8120` in front of `:8020`, and `omg-validation`
+on `:8130` in front of `:8030`. Each fetches its upstream's `/openapi.json` and logs
 `templates loaded: source=omg-api templates=<n> dropped=0`; the other sources are skipped:
 
 ```bash
@@ -174,8 +178,8 @@ Every source at once, for the later steps:
 cd "$FIRE_REPO"
 export OMG_MANIFEST_PATH="$OMG_REPO/scripts/event_chains/event_chains_graph.json"
 export OMG_REPLAY_PATH="$OMG_REPO/scripts/test_payloads"   # 1.3; non-WorkUnit files count as rejected
-export OMG_API_UPSTREAM=http://localhost:8020               # 1.6; the proxy listens on :8021
-export OMG_VALIDATION_UPSTREAM=http://localhost:8030        # 1.6; the proxy listens on :8031
+export OMG_API_UPSTREAM=http://localhost:8020               # 1.6; the proxy listens on :8120
+export OMG_VALIDATION_UPSTREAM=http://localhost:8030        # 1.6; the proxy listens on :8130
 export OMG_TRANSMISSION_BUCKET=order-management-gateway-transmission-data-dev   # 1.7
 export OMG_EVENTS_STREAM=omg-dev-domain-events              # 1.8; needs KINESIS_ENABLED=true
 export OMG_RX_UPDATES_STREAM=rx-updates                     # 1.8; needs KINESIS_ENABLED=true
@@ -185,9 +189,9 @@ export OMG_FINANCIALS_EVENTS_TOPIC=omg-financials-topic-dev      # 1.8
 export AWS_ENDPOINT_URL=http://localhost:4566 AWS_REGION=us-east-1 \
   AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test         # 1.7, 1.8: LocalStack
 uv run python -m fire.apps.tentacle --system omg 2>&1 | tee /tmp/fire-tentacle.log
-lsof -nP -iTCP:8021 -iTCP:8031 -iTCP:4318 -sTCP:LISTEN     # in another terminal
-curl -s -o /dev/null -w '%{http_code}\n' http://localhost:8021/healthcheck   # 200
-curl -s -o /dev/null -w '%{http_code}\n' http://localhost:8031/healthcheck   # 200
+lsof -nP -iTCP:8120 -iTCP:8130 -iTCP:4318 -sTCP:LISTEN     # in another terminal
+curl -s -o /dev/null -w '%{http_code}\n' http://localhost:8120/healthcheck   # 200
+curl -s -o /dev/null -w '%{http_code}\n' http://localhost:8130/healthcheck   # 200
 ```
 
 ## c. Generate traffic
@@ -215,7 +219,7 @@ cd "$OMG_REPO"
 OMG_TOKEN=$(make -s jwt/generate/api SERVICE=neon | sed -n 's/^x-service-token: //p')
 for p in test_order_payload.json test_springfield_order_payload.json \
     test_rma_place_order_payload.json test_rma_exchange_lower_value.json; do
-  curl -sS -o /dev/null -w "$p %{http_code}\n" http://localhost:8021/v1/orders/place_order \
+  curl -sS -o /dev/null -w "$p %{http_code}\n" http://localhost:8120/v1/orders/place_order \
     -H 'Content-Type: application/json' -H "x-service-token: $OMG_TOKEN" \
     --data-binary @"scripts/test_payloads/$p"
 done
@@ -269,7 +273,7 @@ jq --arg c "$C" '.referenceOrderId = $c | .checkoutId = $c
   | .shippingAddress |= (.firstName = "\($c)sfn" | .lastName = "\($c)sln"
       | .streetAddress = "\($c)st" | .extendedAddress = "\($c)ext" | .locality = "\($c)city")' \
   scripts/test_payloads/test_order_payload.json > /tmp/fire-canary-order.json
-curl -sS -o /dev/null -w '%{http_code}\n' http://localhost:8021/v1/orders/place_order \
+curl -sS -o /dev/null -w '%{http_code}\n' http://localhost:8120/v1/orders/place_order \
   -H 'Content-Type: application/json' -H "x-service-token: $OMG_TOKEN" \
   --data-binary @/tmp/fire-canary-order.json
 curl -s -H "$H" http://127.0.0.1:8000/v0/systems/omg/streams | grep -c "$C"   # 0
@@ -282,8 +286,10 @@ If OMG rejects the order, the request still crossed the proxy and the check hold
 
 ## e. Drift demo (step 2.6)
 
-Needs steps 2.1 to 2.4. Warm the request stream past `drift.min_samples` (20 in the spec),
-toggling `adminId`, `adminName`, and `partyId`, which `PlaceOrderRequest` declares optional:
+The inbound part needs sections a (OMG's API, no collector) and b (the body, started with
+`PYTHONUNBUFFERED=1`, and the tentacle's proxies), on a freshly started body. Warm the request
+stream past `drift.min_samples` (20 in `omg.yml`), toggling `adminId`, `adminName`, and
+`partyId`, which `PlaceOrderRequest` declares optional:
 
 ```bash
 cd "$OMG_REPO"
@@ -291,27 +297,46 @@ for i in $(seq 1 24); do
   jq --arg id "firewarm$(date +%s)$i" --argjson i "$i" '.referenceOrderId = $id | .checkoutId = $id
     | if $i % 2 == 0 then del(.adminId, .adminName) else . end
     | if $i % 3 == 0 then del(.partyId) else . end' scripts/test_payloads/test_order_payload.json \
-  | curl -sS -o /dev/null -w '%{http_code} ' http://localhost:8021/v1/orders/place_order \
+  | curl -sS -o /dev/null -w '%{http_code} ' http://localhost:8120/v1/orders/place_order \
       -H 'Content-Type: application/json' -H "x-service-token: $OMG_TOKEN" --data-binary @-
 done; echo
+H="X-FIRE-Token: $FIRE_API_TOKEN"
+curl -s -H "$H" http://127.0.0.1:8000/v0/systems/omg/streams \
+  | jq -c '.streams[] | select(.key | contains("place_order")) | {key, status, samples, drift: (.drift | length)}'
 ```
 
-`/streams` shows the stream warm with no drift signal, and the body printed nothing. Then
-remove the required `timezone` and send `referenceOrderId` as an integer:
+OMG answers `201 201 422`, repeated: a business rule rejects an order without `partyId`
+(`Order requires a party_id`). The request stream folds all 24, so `/streams` shows
+`…place_order:request` `warm` with 24 samples and no drift signal, `:response:2xx` and
+`:response:4xx` in `baseline rebuilding`, and the body printed no notification. Then remove the
+required `timezone` and send `referenceOrderId` as an integer:
 
 ```bash
 jq 'del(.timezone) | .referenceOrderId = 12345 | .checkoutId = "firedrift"' \
   scripts/test_payloads/test_order_payload.json \
-  | curl -sS -o /dev/null -w '%{http_code}\n' http://localhost:8021/v1/orders/place_order \
+  | curl -sS -o /dev/null -w '%{http_code}\n' http://localhost:8120/v1/orders/place_order \
       -H 'Content-Type: application/json' -H "x-service-token: $OMG_TOKEN" --data-binary @-
+sleep 2; grep -c '^\[fire\] notify' /tmp/fire-body.log   # 1; the tentacle flushes every second
 ```
 
-OMG rejects it. Expect exactly one console notification in `/tmp/fire-body.log` naming the
-request channel, the removed `timezone`, and the type change of `referenceOrderId`. With steps
-2.1 and 2.2 alone, the body logs one `shape drift raised` line there instead, with counts only,
-and `/streams` lists the signal, with both paths, under the stream's `drift`. The `4xx`
-response opens a new stream in `baseline rebuilding` and raises nothing. Posting the same
-payload again adds an occurrence to the signal, not a second notification.
+OMG answers `422`. `/tmp/fire-body.log` shows exactly one notification, at once:
+
+```text
+[fire] notify incident=<uuid> system=omg trigger=shape_drift
+*FIRE ENGINE* incident `<uuid>` (`omg`)
+Confidence: 20% — `noul` (do not treat as settled cause)
+Possibilities:
+• (50%) Shape drift on http:inbound:POST /v1/orders/place_order:request: referenceOrderId changed string -> integer; timezone (string) removed _[shape_drift]_
+• (50%) Insufficient evidence (MISSING fragments) _[process_path]_
+Shape hash: `<schema_hash>`
+_Narrator: template stub (swap OpenAI-compat via FIRE_NARRATOR_*)._
+```
+
+`/streams` lists the signal, with both paths, under the request stream's `drift`. Posting the
+same payload again adds an occurrence to the signal, not a second notification. Its `422` goes
+to the `:response:4xx` stream, still rebuilding, and raises nothing. Warm up once before the
+drifted payload: after three loops the `party_id` errors alone warm `:response:4xx`, and the
+drifted payload's `422`, shaped differently, would notify for that channel too.
 
 L1 replays need no OMG stack. TODO(2.6): the replay commands for `corpora/outbound/` (an Oracle
 response that lost a field: one notification for that partner action) and `corpora/path/` (the
@@ -342,8 +367,11 @@ rm -f /tmp/fire-body.log /tmp/fire-tentacle.log /tmp/fire-canary-order.json
 - **The collector cannot reach the tentacle.** Its logs show `otlphttp/fire` export errors. Test
   from OMG's network with `docker run --rm --network warbyparker --add-host host.docker.internal:host-gateway curlimages/curl -s -o /dev/null -w '%{http_code}\n' -X POST -H 'Content-Type: application/json' -d '{}' http://host.docker.internal:4318/v1/traces`.
   On Linux the tentacle must listen on `0.0.0.0`, not `127.0.0.1`.
-- **A tentacle port is busy.** The tentacle exits `2` with `cannot listen on 127.0.0.1:8021`;
-  `lsof -nP -iTCP:8021 -iTCP:8031 -iTCP:4318 -sTCP:LISTEN` names the process.
+- **A tentacle port is busy.** The tentacle exits `2` with `cannot listen on 127.0.0.1:8120`;
+  `lsof -nP -iTCP:8120 -iTCP:8130 -iTCP:4318 -sTCP:LISTEN` names the process. Without `sudo`,
+  `lsof` misses sockets held by `launchd`; `netstat -anv -p tcp | grep LISTEN` shows them. On
+  macOS, `launchd` can hold `localhost:8021` for `com.apple.ftp-proxy`, which is why the proxies
+  listen on `:8120` and `:8130`.
 - **No inbound streams.** The counters line shows `skipped=templates_unavailable:<n>` while the
   proxy cannot fetch its upstream's `/openapi.json` (the log says `templates unavailable` once,
   then it retries every 5 s), and `unmatched_route:<n>` for paths OMG does not declare. A

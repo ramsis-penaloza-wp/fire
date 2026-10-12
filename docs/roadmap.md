@@ -233,7 +233,7 @@ fixtures; with `OMG_REPO` set, the test also reads them from OMG. Canary.
 
 **Delivers:**
 
-- A reverse proxy in the tentacle in front of the OMG API (`:8021` to `:8020`) and the
+- A reverse proxy in the tentacle in front of the OMG API (`:8120` to `:8020`) and the
   validation engine.
 - Route templates loaded from the upstream's `/openapi.json`, so a concrete path maps to its
   template. A path that matches no template is counted, not sent.
@@ -489,6 +489,10 @@ observed. Contract drift stays optional.
   notification.
 
 **Test.** L2 and L1 as above, with the notifications in the pull request.
+
+**Inbound part run.** The L2 inbound bullet passes with what 1.6, 2.1, 2.2, and 2.4 shipped:
+[e. Drift demo](../dev/omg/README.md#e-drift-demo-step-26) has the commands and the
+notification. The L1 bullets wait on 1.7, 1.9, and 2.3.
 
 ## Phase 3: triggers
 

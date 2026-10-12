@@ -317,8 +317,8 @@ Elsewhere this document uses OMG's logical names (`domain_events`, `carrier_even
 
 ```yaml
 sources:
-  - {id: omg-api, kind: http_proxy, listen_port: 8021, upstream_env: OMG_API_UPSTREAM}
-  - {id: omg-validation, kind: http_proxy, listen_port: 8031,
+  - {id: omg-api, kind: http_proxy, listen_port: 8120, upstream_env: OMG_API_UPSTREAM}
+  - {id: omg-validation, kind: http_proxy, listen_port: 8130,
      upstream_env: OMG_VALIDATION_UPSTREAM}
   - id: domain-events
     kind: kinesis
