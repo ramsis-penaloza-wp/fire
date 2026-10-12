@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from fire.core.domain.baseline import DriftPolicy
 from fire.core.domain.envelope import DottedPath, Envelope
+from fire.core.domain.flow import PathPolicy
 from fire.core.domain.observation import ChannelDirection
 from fire.core.domain.operation import OperationRules
 
@@ -289,6 +290,8 @@ class SystemConfig(_Strict):
     policy: PolicyConfig = Field(default_factory=PolicyConfig)
     fingerprinting: FingerprintingConfig = Field(default_factory=FingerprintingConfig)
     drift: DriftPolicy = Field(default_factory=DriftPolicy)
+    # When flows settle. Contract: docs/specs/flows-and-paths.md#completion.
+    paths: PathPolicy = Field(default_factory=PathPolicy)
 
     @model_validator(mode="after")
     def _source_ids_are_unique(self) -> SystemConfig:

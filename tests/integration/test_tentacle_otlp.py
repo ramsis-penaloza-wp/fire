@@ -23,6 +23,7 @@ import pytest
 import yaml
 from canary import Canary
 from otlp_json import event, link, request, resource_spans, span
+from spans import Clock
 
 import fire.apps.incident_engine.app as app_module
 from fire.apps.incident_engine.app import app
@@ -69,6 +70,8 @@ class Stack:
     transport: RecordingTransport
     stop: asyncio.Event
     running: asyncio.Task[int]
+    # The body's clock.
+    clock: Clock
 
     async def post(self, document: Any) -> httpx.Response:
         async with httpx.AsyncClient(trust_env=False, timeout=10) as client:
@@ -103,7 +106,8 @@ async def stack(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> AsyncIterato
     }
     (fire_yml.parent / "systems" / "shop.yml").write_text(yaml.safe_dump(system), encoding="utf-8")
     monkeypatch.setenv("FIRE_API_TOKEN", TOKEN)
-    app_module._container = build_container(fire_yml)
+    clock = Clock()
+    app_module._container = build_container(fire_yml, clock=clock)
     environ = {
         "FIRE_API_TOKEN": TOKEN,
         "FIRE_BODY_URL": "http://body",
@@ -115,7 +119,7 @@ async def stack(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> AsyncIterato
         run(prepare("shop", config_path=fire_yml, environ=environ), stop, transport=transport)
     )
 
-    yield Stack(f"http://127.0.0.1:{port}", transport, stop, running)
+    yield Stack(f"http://127.0.0.1:{port}", transport, stop, running, clock)
 
     if not running.done():
         stop.set()
@@ -123,12 +127,17 @@ async def stack(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> AsyncIterato
     app_module._container = None
 
 
-async def _streams() -> dict[str, Any]:
+async def _get(path: str) -> dict[str, Any]:
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://body") as client:
-        response = await client.get("/v0/systems/shop/streams", headers=HEADERS)
+        response = await client.get(path, headers=HEADERS)
     assert response.status_code == 200
-    return {stream["key"]: stream for stream in response.json()["streams"]}
+    return response.json()
+
+
+async def _streams() -> dict[str, Any]:
+    body = await _get("/v0/systems/shop/streams")
+    return {stream["key"]: stream for stream in body["streams"]}
 
 
 def _order_flow(order: dict[str, Any]) -> dict[str, Any]:
@@ -407,6 +416,11 @@ async def test_recorded_spans_canary(
     ]
     for body in stack.transport.bodies:
         assert canary.leaks(body, envelope=False) == []
+    stack.clock.advance(60)
+    paths = await _get("/v0/systems/shop/paths")
+    [path] = paths["paths"]
+    assert path["entry"]["operation"] == ROUTE
+    assert canary.leaks(json.dumps(paths), envelope=False) == []
     captured = capfd.readouterr()
     for output in (caplog.text, captured.out, captured.err):
         assert canary.leaks(output, envelope=False) == []

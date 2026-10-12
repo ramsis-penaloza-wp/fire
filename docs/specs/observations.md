@@ -22,7 +22,9 @@ returns a `ShapeAdmission`, `IngestService` calls `on_drift` once per new signal
 stream lists its open signals (`fire/core/domain/drift.py`); the contract is
 [Drift rules](ingest-drift-and-feedback.md#drift-rules). Step 2.4 moved `on_drift` to
 `IngestService.ingest`, passed per call, and the ingest endpoint's hook opens a drift incident
-([Drift incidents](ingest-drift-and-feedback.md#drift-incidents)).
+([Drift incidents](ingest-drift-and-feedback.md#drift-incidents)). Step 1.9 gave the catalog
+flows and paths, `complete_flows` and `paths`, whose contract is
+[flows-and-paths.md](flows-and-paths.md); step 2.3 added their path drift.
 
 ## Channel
 
@@ -209,8 +211,10 @@ Port in `fire/core/ports/observation_catalog.py`; the first adapter is in memory
 | Operation | Contract |
 |-----------|----------|
 | `add_shape(observation) -> ShapeAdmission` | Stores the observation unless its dedupe key is known. A stored shape is admitted to the baseline of its stream key in the same atomic step, under the system's drift policy. Returns `duplicate`, `folded`, `drift_raised`, or `drift_repeated`, with the signal on a drift outcome ([Drift rules](ingest-drift-and-feedback.md#drift-rules)) |
-| `add_span(observation) -> bool` | Stores the span unless `(system, trace_id, span_id)` is known; returns whether it did |
+| `add_span(observation) -> bool` | Stores the span unless `(system, trace_id, span_id)` is known; returns whether it did. A stored span joins its system's flows in the same step |
 | `streams(system) -> list[StreamSummary]` | One summary per stream key of the system, with its baseline's `status`, `samples`, and open drift signals, sorted as in [Streams endpoint](#streams-endpoint); empty for a system with no observations |
+| `complete_flows() -> list[PathDrift]` | Completes the flows of every system that settled by the catalog's clock, ends each in its outcome, and returns one `PathDrift` per flow that fired a new path drift signal ([Path drift](flows-and-paths.md#path-drift)) |
+| `paths(system) -> PathsReport` | The system's open flow count, counters, and paths, sorted as in [Paths endpoint](flows-and-paths.md#paths-endpoint); completes nothing; a system with no spans has zeros and no path |
 
 The operations are synchronous. A `StreamSummary` holds `source`, `channel`, `status` (a
 `BaselineStatus` under the system's drift policy), `samples` (the observations folded into the
@@ -227,17 +231,21 @@ Per stream key the catalog keeps the observation count, a `Baseline`, and, per f
 `Shape`, its count, and the earliest and latest `observed_at`, whatever the arrival order. Per
 accepted shape it keeps an index entry: the dedupe key, the stream key, `schema_hash`, both
 timestamps, `region`, `trace_id`, `span_id`, `work_id`, and `correlation_id`. Spans are kept
-whole. Flows read spans and index entries ([Shapes on flows](flows-and-paths.md#shapes-on-flows));
-baselines fold per stream key ([Baseline](ingest-drift-and-feedback.md#baseline)). Steps 2.1 and
-2.2 gave the port its baseline reads, the `status`, `samples`, and `drift` of `streams`; the
-flow reads come with step 1.9.
+whole. Every stored span, and every stored shape with a `trace_id` or a `work_id`, joins its
+system's flows in the step that stores it, on the catalog's clock at acceptance
+([Trace assembly](flows-and-paths.md#trace-assembly),
+[Shapes on flows](flows-and-paths.md#shapes-on-flows)); baselines fold per stream key
+([Baseline](ingest-drift-and-feedback.md#baseline)). Steps 2.1 and 2.2 gave the port its
+baseline reads, the `status`, `samples`, and `drift` of `streams`; step 1.9 gave it
+`complete_flows` and `paths`.
 
 Checking and storing a dedupe key is one atomic step, so concurrent tentacles, two regions, and
 resent batches store each observation once. `MemoryObservationCatalog` guards every operation
-with one lock and keeps its dedupe index, baselines, and drift signals for the life of the
-process; a retention window comes with the SQLite adapter in step 3.1. It takes each system's
-drift policy, the system YAML's `drift` block, from `build_container`; a system it does not name
-gets the defaults.
+with one lock and keeps its dedupe index, baselines, drift signals, open flows, and paths for the
+life of the process; a retention window comes with the SQLite adapter in step 3.1. It takes each
+system's drift policy and path policy, the system YAML's `drift` and `paths` blocks, and the
+body's clock (the current UTC time unless a test injects one) from `build_container`; a system
+it does not name gets the defaults.
 
 ## Streams endpoint
 
@@ -315,8 +323,10 @@ and `tests/integration/test_observations_api.py`, and the L1 test
 copied with placeholder values that keep every value type, so its shape equals OMG's; an
 `omg_local` test checks that. Step 2.4 added cases in `tests/unit/test_observation_ingest.py`
 for the hook passed per call; its other tests are in
-[Drift incidents](ingest-drift-and-feedback.md#drift-incidents). Integration tests use
-`TestClient` with config written to `tmp_path`.
+[Drift incidents](ingest-drift-and-feedback.md#drift-incidents). Steps 1.9 and 2.3 added flow
+cases to `tests/unit/test_observation_catalog_memory.py`; their other tests are in
+[flows-and-paths.md](flows-and-paths.md#tests). Integration tests use `TestClient` with config
+written to `tmp_path`.
 
 | Step | Level | Proves |
 |------|-------|--------|
@@ -333,6 +343,7 @@ for the hook passed per call; its other tests are in
 | 2.2 | L1 | 20 variants of OMG's place-order request toggling `adminId`, `adminName`, and `partyId` warm the request stream with no drift, and a combination never seen folds silently; a copy without `timezone` and with an integer `referenceOrderId` raises one signal with that diff, and 100 copies are one signal with 100 occurrences and one log line; removing a required `checkoutId`, or `totals` with its children, reports only those removals; no placeholder value reaches `/streams`, the logs, or the catalog |
 | 2.2 | Integration | A different shape on a rebuilding stream folds and raises nothing; a drifted shape on a warm stream is `accepted` and listed under `drift` with its exact diff, with `samples` lower than `observations`; sent again, it adds occurrences and logs one line without its paths; a duplicate of it adds no occurrence |
 | 2.4 | L0 | Each `ingest` call reports its own signals to the hook passed with it, by 2.2's rules; a call without a hook still records the drift; a hook call that raises logs one `ERROR` line without the exception's message, and the next signal's call still runs |
+| 1.9, 2.3 | L0 | A settled flow folds into its path; a duplicate span does not extend settle; `complete_flows` returns the drift of a flow with a new signal; each system has its own flows and path policy; stored shapes with a trace join their flow and duplicates do not; `paths` of a system without spans is an empty report, and returns copies |
 
 ## Open questions
 

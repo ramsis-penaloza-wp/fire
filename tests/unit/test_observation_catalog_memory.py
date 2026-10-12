@@ -8,12 +8,14 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
+from spans import Clock, order_spans, trace_id
 
 from fire.adapters.memory.observation_catalog import MemoryObservationCatalog
 from fire.adapters.shapes.sha256 import Sha256ShapeFingerprinter
 from fire.core.domain.baseline import BaselineStatus, DriftPolicy
 from fire.core.domain.dossier import Shape, ShapeField, ValueType
 from fire.core.domain.drift import Admission, ShapeAdmission
+from fire.core.domain.flow import FlowCounters, Node, PathPolicy
 from fire.core.domain.observation import (
     Channel,
     ChannelDirection,
@@ -23,6 +25,7 @@ from fire.core.domain.observation import (
     SpanKind,
     SpanObservation,
 )
+from fire.core.domain.path import PathsReport
 from fire.core.ports.observation_catalog import ObservationCatalog
 
 T0 = datetime(2026, 10, 11, 16, 30, tzinfo=UTC)
@@ -435,3 +438,140 @@ def test_concurrent_adds_of_one_drifted_fingerprint_raise_one_signal() -> None:
     [stream] = catalog.streams("shop")
     assert [signal.occurrences for signal in stream.drift] == [workers]
     assert (stream.samples, stream.observations) == (2, 2 + workers)
+
+
+# Flows and paths
+
+
+def _flow_catalog(
+    min_samples: int = 2, settle_s: float = 60
+) -> tuple[MemoryObservationCatalog, Clock]:
+    clock = Clock()
+    catalog = MemoryObservationCatalog(
+        {"shop": DriftPolicy(min_samples=min_samples)},
+        path_policies={"shop": PathPolicy(settle_s=settle_s)},
+        clock=clock,
+    )
+    return catalog, clock
+
+
+def _add_spans(catalog: MemoryObservationCatalog, spans: list[SpanObservation]) -> None:
+    for item in spans:
+        assert catalog.add_span(item) is True
+
+
+@pytest.mark.unit
+def test_a_settled_flow_folds_into_its_path() -> None:
+    catalog, clock = _flow_catalog()
+    _add_spans(catalog, order_spans(1, "DynamoDB.PutItem orders"))
+
+    clock.advance(59)
+    assert catalog.complete_flows() == []
+    assert catalog.paths("shop").open_flows == 1
+    clock.advance(1)
+    assert catalog.complete_flows() == []
+
+    report = catalog.paths("shop")
+    assert report.open_flows == 0
+    [path] = report.paths
+    assert (path.entry, path.status, path.flows) == (
+        Node(service="orders-api", operation="POST /orders"),
+        BaselineStatus.REBUILDING,
+        1,
+    )
+
+
+@pytest.mark.unit
+def test_a_duplicate_span_does_not_extend_its_flows_settle_time() -> None:
+    catalog, clock = _flow_catalog()
+    spans = order_spans(1, "DynamoDB.PutItem orders")
+    _add_spans(catalog, spans)
+
+    clock.advance(30)
+    assert catalog.add_span(spans[1]) is False
+    clock.advance(30)
+    catalog.complete_flows()
+
+    assert catalog.paths("shop").open_flows == 0
+
+
+@pytest.mark.unit
+def test_complete_flows_returns_the_path_drift_of_a_flow_with_a_new_signal() -> None:
+    catalog, clock = _flow_catalog()
+    for trace in (1, 2):
+        _add_spans(catalog, order_spans(trace, "DynamoDB.PutItem orders"))
+    clock.advance(60)
+    assert catalog.complete_flows() == []
+
+    _add_spans(catalog, order_spans(3, "DynamoDB.PutItem orders", "POST pay.example.com/v1"))
+    _add_spans(catalog, order_spans(4, "DynamoDB.PutItem orders", "POST pay.example.com/v1"))
+    clock.advance(60)
+    [drift] = catalog.complete_flows()
+
+    assert (drift.system, drift.entry.operation, drift.trace_ids) == (
+        "shop",
+        "POST /orders",
+        [trace_id(3)],
+    )
+    [path] = catalog.paths("shop").paths
+    assert (path.status, path.flows, path.drifted_flows) == (BaselineStatus.WARM, 2, 2)
+    [signal] = path.drift
+    assert (signal.rule, signal.node.operation, signal.occurrences) == (
+        "hop_added",
+        "POST pay.example.com/v1",
+        2,
+    )
+
+
+@pytest.mark.unit
+def test_each_system_has_its_own_flows_and_path_policy() -> None:
+    clock = Clock()
+    catalog = MemoryObservationCatalog(
+        path_policies={"shop": PathPolicy(settle_s=10)}, clock=clock
+    )
+    _add_spans(catalog, order_spans(1, "DynamoDB.PutItem orders"))
+    _add_spans(catalog, order_spans(1, "DynamoDB.PutItem orders", system="billing"))
+
+    clock.advance(10)
+    catalog.complete_flows()
+
+    assert [path.flows for path in catalog.paths("shop").paths] == [1]
+    billing = catalog.paths("billing")
+    assert (billing.open_flows, billing.paths) == (1, [])
+
+
+@pytest.mark.unit
+def test_stored_shapes_with_a_trace_join_their_flow_and_duplicates_do_not() -> None:
+    catalog, clock = _flow_catalog()
+    spans = order_spans(1, "DynamoDB.PutItem orders")
+    _add_spans(catalog, spans)
+    joined = _shape_observation(
+        "shape-1", trace_id=trace_id(1), span_id=spans[1].span_id, observed_at=T0
+    )
+    assert catalog.add_shape(joined).stored
+    assert catalog.add_shape(joined) == DUPLICATE
+    assert catalog.add_shape(_shape_observation("shape-2")).stored
+
+    clock.advance(60)
+    catalog.complete_flows()
+
+    [path] = catalog.paths("shop").paths
+    put = next(node for node in path.nodes if node.operation == "DynamoDB.PutItem orders")
+    assert put.channels == {"event:internal:order.created:payload": 1}
+    assert catalog.paths("shop").counters.unattached_shapes == 0
+
+
+@pytest.mark.unit
+def test_paths_of_a_system_without_spans_is_an_empty_report() -> None:
+    report = MemoryObservationCatalog().paths("shop")
+
+    assert report == PathsReport(system="shop", open_flows=0, counters=FlowCounters(), paths=[])
+
+
+@pytest.mark.unit
+def test_paths_returns_copies_of_the_counters() -> None:
+    catalog, _clock = _flow_catalog()
+    catalog.paths("shop").counters.late_spans = 5
+    _add_spans(catalog, order_spans(1))
+
+    assert catalog.paths("shop").counters.late_spans == 0

@@ -6,6 +6,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
+from spans import at, order_flow, trace_id
 
 from fire.adapters.memory.observation_catalog import MemoryObservationCatalog
 from fire.adapters.shapes.sha256 import Sha256ShapeFingerprinter
@@ -19,9 +20,11 @@ from fire.core.domain.dossier import (
     ValueType,
 )
 from fire.core.domain.drift import Admission, DriftSignal, FieldRef, ShapeDiff, TypeChange
+from fire.core.domain.flow import FlowCounters, Node
 from fire.core.domain.incident import Trigger
 from fire.core.domain.inventory import DeclaredEvent, SystemInventory
 from fire.core.domain.observation import Channel, ShapeObservation
+from fire.core.domain.path import Path, PathDrift, settle
 from fire.core.services.coverage import CoverageScope
 from fire.core.services.drift_incident import DriftIncidentService
 
@@ -329,3 +332,94 @@ def test_a_stream_the_catalog_does_not_hold_has_a_missing_baseline(
         data={"source": SOURCE, "stream": STREAM},
     )
     assert dossier.fragments[2].data["declared_unseen"] == ["order.created"]
+
+
+# Path drift
+
+PUT = "DynamoDB.PutItem orders"
+PAY = "POST payments.example.com/v1/charges"
+TAX = "POST tax.example.com/v1/codes"
+
+
+def _path_drift(*calls: str, start: float = 30) -> PathDrift:
+    """Warms `POST /orders` with PUT and PAY, then settles a flow with `calls`."""
+    paths: dict[Node, Path] = {}
+    policy = DriftPolicy(min_samples=2)
+    for trace in (1, 2):
+        settle(order_flow(trace, PUT, PAY), paths, policy, FlowCounters(), SYSTEM)
+    settle(order_flow(3, PUT), paths, policy, FlowCounters(), SYSTEM)
+    _outcome, drift = settle(
+        order_flow(4, *calls, start=start), paths, policy, FlowCounters(), SYSTEM
+    )
+    assert drift is not None
+    return drift
+
+
+@pytest.mark.unit
+def test_a_path_drift_incident_is_one_per_flow_from_its_entry_start(
+    catalog: MemoryObservationCatalog,
+) -> None:
+    drift = _path_drift(TAX)
+
+    incident, dossier = _service(catalog, NO_SCOPE).open_path_drift(drift)
+
+    assert (incident.id, incident.system, incident.trigger) == (
+        INCIDENT_ID,
+        SYSTEM,
+        Trigger.PATH_DRIFT,
+    )
+    assert incident.service is None
+    assert incident.summary == "Path drift on POST /orders"
+    assert incident.started_at == at(30)
+    assert (dossier.incident_id, dossier.system, dossier.service) == (INCIDENT_ID, SYSTEM, None)
+    assert (dossier.origin, dossier.shape, dossier.fingerprint) == (None, None, None)
+    assert dossier.missing == []
+
+
+@pytest.mark.unit
+def test_a_path_drift_dossier_holds_the_flows_process_path_and_one_fragment_per_signal(
+    catalog: MemoryObservationCatalog,
+) -> None:
+    drift = _path_drift(TAX)
+
+    _incident, dossier = _service(catalog, NO_SCOPE).open_path_drift(drift)
+
+    assert dossier.process_path == order_flow(4, TAX, start=30).process_path()
+    assert [fragment.summary for fragment in dossier.fragments] == [
+        f"hop_added: {TAX} on POST /orders",
+        f"hop_missing: {PUT} on POST /orders",
+        f"hop_missing: {PAY} on POST /orders",
+    ]
+    assert {fragment.collector for fragment in dossier.fragments} == {"path_drift"}
+    assert {fragment.quality for fragment in dossier.fragments} == {EvidenceQuality.PRESENT}
+
+
+@pytest.mark.unit
+def test_a_path_drift_fragment_names_the_rule_entry_node_counts_and_traces(
+    catalog: MemoryObservationCatalog,
+) -> None:
+    drift = _path_drift(TAX)
+
+    _incident, dossier = _service(catalog, NO_SCOPE).open_path_drift(drift)
+
+    added, missing_put, missing_pay = dossier.fragments
+    entry = {"service": "orders-api", "operation": "POST /orders"}
+    assert added.data == {
+        "rule": "hop_added",
+        "entry": entry,
+        "node": {"service": "orders-api", "operation": TAX},
+        "path_flows": 2,
+        "node_flows": 0,
+        "node_errors": 0,
+        "flow_spans": 1,
+        "flow_errors": 0,
+        "occurrences": 1,
+        "first_seen": "2026-10-11T16:40:30Z",
+        "trace_ids": [trace_id(4)],
+    }
+    # Flow 3 drifted, so the path holds only the two flows that warmed it.
+    assert (missing_put.data["node_flows"], missing_put.data["flow_spans"]) == (2, 0)
+    # PAY was missing from flow 3 already: an old signal, with the first flow's trace.
+    assert missing_pay.data["occurrences"] == 2
+    assert missing_pay.data["trace_ids"] == [trace_id(3)]
+    assert missing_pay.data["first_seen"] == "2026-10-11T16:40:00Z"

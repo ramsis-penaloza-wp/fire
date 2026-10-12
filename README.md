@@ -122,6 +122,9 @@ reverse proxy in front of an HTTP service that shapes each request and response 
 and runs `otlp` sources, an OTLP/HTTP JSON receiver that turns the system's spans into
 attribute-free span observations with operation names built from code
 (`docs/specs/http-and-span-capture.md`).
+The body assembles those spans into **flows** that cross async hops through span links, learns
+one **path** per entry operation, and opens a `path_drift` incident, with the flow's process
+path, when a complete flow adds, misses, or fails a hop (`docs/specs/flows-and-paths.md`).
 Agent rules for this repo live in `.cursor/rules/`.
 
 Next: Laya/Jev System One adapter, OpenAI-compat Narrator, Slack notifier,
@@ -175,6 +178,9 @@ No fail-open “secret optional” mode outside an explicit local-dev override.
   diagnosed in the background (`docs/specs/ingest-drift-and-feedback.md`).
 - `GET /v0/systems/{system}/streams` — baseline status and samples, observation and
   fingerprint counts, and open shape drift signals, per stream key (`X-FIRE-Token` required).
+- `GET /v0/systems/{system}/paths` — completes settled flows, then lists open flows, flow
+  counters, and one path per entry operation with its nodes, edges, and path drift signals
+  (`X-FIRE-Token` required; `docs/specs/flows-and-paths.md`).
 
 ### Planned
 

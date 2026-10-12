@@ -1,9 +1,10 @@
 # Ingest, drift, and feedback
 
 **Status:** phase 0, [Baseline](#baseline) (roadmap step 2.1), [Drift rules](#drift-rules)
-(step 2.2), and [Drift incidents](#drift-incidents) for shape drift (step 2.4) are the contract
-of the shipped code; step 2.3 opens path drift incidents. Phase 1 lives in the specs its
-sections link to, each with its own status; the rest of phases 2 to 4 is a proposal.
+(step 2.2), and [Drift incidents](#drift-incidents) (step 2.4 for shape drift, step 2.3 for path
+drift) are the contract of the shipped code. Phase 1 lives in the specs its sections link to,
+each with its own status; path drift and its incidents are in
+[flows-and-paths.md](flows-and-paths.md#path-drift); the rest of phases 2 to 4 is a proposal.
 
 This is the route from the first engine, which only diagnosed what a caller posted to
 `POST /v0/diagnose`, to an engine that watches a system on its own, detects shape drift,
@@ -117,7 +118,8 @@ rebuilding. SQLite comes after the demo.
 ### Flows and paths
 
 [flows-and-paths.md](flows-and-paths.md) defines how the body assembles spans into flows,
-learns a path per entry operation, and attaches shapes to their spans.
+learns a path per entry operation, attaches shapes to their spans, and serves
+`GET /v0/systems/{system}/paths` (step 1.9).
 
 ## Phase 2: drift
 
@@ -345,9 +347,9 @@ With an inventory, `coverage` runs `audit_coverage`
 event types: the names of its `kind: event` channels in the catalog, across its sources. `http`
 channels are not events and are left out.
 
-`process_path` is missing because flows come with step 1.9
-([Process path in the dossier](flows-and-paths.md#process-path-in-the-dossier)). Whether a
-shape drift incident should wait for its shape's flow is
+`process_path` is missing because the incident opens when its shape arrives, before the shape's
+flow can complete ([Process path in the dossier](flows-and-paths.md#process-path-in-the-dossier)).
+Whether a shape drift incident should wait for its shape's flow is
 [flows-and-paths.md, open question 3](flows-and-paths.md#open-questions). Until then every
 shape drift dossier has a missing fragment, so its decision is `noul` at confidence `0.2`.
 
@@ -377,9 +379,11 @@ _Narrator: template stub (swap OpenAI-compat via FIRE_NARRATOR_*)._
 The notification names the changed paths and their types, as `/streams` does; the `INFO` line
 names counts only ([Drift rules](#drift-rules)).
 
-`path_drift` is a `Trigger` value and `EchoReasoner` reads `path_drift` fragments
-([Path drift](flows-and-paths.md#path-drift)), but nothing opens a path drift incident yet. Step
-2.3 does, with one `path_drift` fragment per signal the flow fired and the flow's process path.
+Since step 2.3, a complete flow that fires a new path drift signal opens one incident with
+`trigger: path_drift`, through `DriftIncidentService.open_path_drift`. Its dossier holds the
+flow's process path and one `path_drift` fragment per signal the flow fired, which
+`EchoReasoner` reads; [Path drift incidents](flows-and-paths.md#path-drift-incidents) defines the
+incident, the dossier, its log line, and the notification.
 
 Step 2.4's tests are `tests/unit/test_drift_incident.py`, `tests/unit/test_console_notifier.py`,
 cases in `tests/unit/test_echo_reasoner.py`, `tests/unit/test_observation_ingest.py`,
@@ -408,7 +412,10 @@ cases in `tests/unit/test_echo_reasoner.py`, `tests/unit/test_observation_ingest
 ### Read endpoints
 
 `GET /v0/systems/{system}/streams` lists each stream key with its `status`, `samples`, and open
-drift signals (steps 2.1 and 2.2). Both read endpoints require `X-FIRE-Token`.
+drift signals (steps 2.1 and 2.2). `GET /v0/systems/{system}/paths` lists each entry's path with
+its `status`, counts, and path drift signals (steps 1.9 and 2.3;
+[Paths endpoint](flows-and-paths.md#paths-endpoint)). Both read endpoints require
+`X-FIRE-Token`.
 
 ### Demo
 
@@ -470,6 +477,9 @@ drift signals (steps 2.1 and 2.2). Both read endpoints require `X-FIRE-Token`.
 | `EchoReasoner` says "No path/shape evidence yet" when a shape is present | One possibility per drift fragment; the `unknown` label names only the evidence that is absent | 2.4 |
 | `ProcessHop` cannot mark an edge that crosses a span link | An optional `via` on edge hops ([ProcessHop](dossier-and-decision.md#processhop)) | 2.4 |
 | `IngestService` takes `on_drift` in its constructor | `ingest` takes it per call ([Drift rules](#drift-rules)) | 2.4 |
+| `ObservationCatalog` stores spans and nothing reads them | Stored spans and shapes join flows; `complete_flows()` and `paths(system)` ([ObservationCatalog](observations.md#observationcatalog)) | 1.9 |
+| `MemoryObservationCatalog(policies)` and `build_container(config_path)` | Also a system's `paths` policy and the body's `clock`, which tests inject | 1.9 |
+| Nothing opens a `path_drift` incident | A flow that fires a new path drift signal opens one ([Path drift incidents](flows-and-paths.md#path-drift-incidents)) | 2.3 |
 
 Step 1.1 made `Shape`, `ShapeField`, and `ShapeFingerprint` reject unknown fields
 ([Privacy invariants](observations.md#privacy-invariants)). Step 1.2 replaced `ShapeCatalog`

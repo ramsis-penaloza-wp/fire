@@ -15,7 +15,7 @@ the system changes, and nothing notices until FIRE misses something during an in
 |------|----------------|----------------|
 | Slack target, manifest location, sources | `config/systems/<system>.yml` | A person, in a PR |
 | Policy exceptions (`critical`, `ignore`) | `config/systems/<system>.yml` | A person, in a PR |
-| Drift thresholds (`drift`) | `config/systems/<system>.yml` | A person, in a PR |
+| Drift thresholds (`drift`) and flow settling (`paths`) | `config/systems/<system>.yml` | A person, in a PR |
 | Declared events, processors, ingress, payload types | `SystemInventory`, parsed from the manifest | Discovery, at startup |
 | Observed events | The catalog (once the tentacle feeds it) | The tentacle |
 
@@ -46,7 +46,10 @@ from the `systems/` directory next to `config/fire.yml`.
 | `policy.ignore` | no | Known noise, left out of coverage gaps |
 | `fingerprinting.sample_rate` | no | In `(0, 1]`, default `1.0` |
 | `drift.min_samples` | no | Observations folded before a stream is warm; `1` or more, default `20`, see [Baseline](ingest-drift-and-feedback.md#baseline) |
-| `drift.required_ratio` | no | Share of samples that makes a field required, for the `removed` drift rule; in `(0, 1]`, default `1.0`, see [Baseline](ingest-drift-and-feedback.md#baseline) |
+| `drift.required_ratio` | no | Share of samples that makes a field required, for the `removed` drift rule; in `(0, 1]`, default `1.0`, see [Baseline](ingest-drift-and-feedback.md#baseline). Paths read both `drift` keys for path drift ([Path drift](flows-and-paths.md#path-drift)) |
+| `paths.settle_s` | no | Seconds with no span joining a flow before it completes; `1` or more, finite, default `60`, see [Completion](flows-and-paths.md#completion) |
+| `paths.max_open_flows` | no | Open flows per system; one more evicts the open flow joined least recently; `1` or more, default `10000` |
+| `paths.max_spans_per_flow` | no | Spans kept per flow; more are dropped and the flow is truncated; `1` or more, default `1000` |
 
 ### Slack target
 
