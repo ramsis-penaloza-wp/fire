@@ -65,6 +65,13 @@ class StatusClass(StrEnum):
     SERVER_ERROR = "5xx"
     NO_RESPONSE = "none"
 
+    @classmethod
+    def of(cls, status_code: int) -> StatusClass | None:
+        """The class of a status from 200 to 599; None for any other."""
+        if not 200 <= status_code <= 599:
+            return None
+        return cls(f"{status_code // 100}xx")
+
 
 _PARTS_BY_KIND = {
     ChannelKind.HTTP: {ChannelPart.REQUEST, ChannelPart.RESPONSE},

@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from fire.core.domain.baseline import DriftPolicy
 from fire.core.domain.envelope import DottedPath, Envelope
 from fire.core.domain.observation import ChannelDirection
+from fire.core.domain.operation import OperationRules
 
 
 class _Strict(BaseModel):
@@ -119,7 +120,9 @@ class _Source(_Strict):
 
     @property
     def location_env(self) -> str:
-        """The env var naming what the source reads: a path, stream, table, topic, or bucket."""
+        """The env var naming what the source reads: a path, stream, table, topic, bucket,
+        upstream, or listen address.
+        """
         raise NotImplementedError
 
 
@@ -233,13 +236,28 @@ class HttpProxySourceConfig(_Source):
         return self.upstream_env
 
 
+class OtlpSourceConfig(_Source):
+    """An OTLP/HTTP JSON receiver for the system's traces. Contract:
+    docs/specs/http-and-span-capture.md#otlp-receiver.
+    """
+
+    kind: Literal["otlp"]
+    # Holds the address the receiver listens on, host:port, such as 127.0.0.1:4318.
+    listen_env: EnvName
+
+    @property
+    def location_env(self) -> str:
+        return self.listen_env
+
+
 SourceConfig = Annotated[
     ReplaySourceConfig
     | KinesisSourceConfig
     | DynamoDbStreamSourceConfig
     | SnsFanoutSourceConfig
     | S3CaptureSourceConfig
-    | HttpProxySourceConfig,
+    | HttpProxySourceConfig
+    | OtlpSourceConfig,
     Field(discriminator="kind"),
 ]
 
@@ -266,6 +284,8 @@ class SystemConfig(_Strict):
     notify: NotifyConfig
     discovery: DiscoveryConfig = Field(default_factory=DiscoveryConfig)
     sources: list[SourceConfig] = Field(default_factory=list)
+    # How outbound calls are named. Contract: docs/specs/http-and-span-capture.md#operation-names.
+    operations: OperationRules = Field(default_factory=OperationRules)
     policy: PolicyConfig = Field(default_factory=PolicyConfig)
     fingerprinting: FingerprintingConfig = Field(default_factory=FingerprintingConfig)
     drift: DriftPolicy = Field(default_factory=DriftPolicy)

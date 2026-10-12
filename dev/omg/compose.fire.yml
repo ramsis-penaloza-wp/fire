@@ -1,0 +1,12 @@
+# FIRE's override for OMG's local stack: passed after OMG's own compose files with one more -f.
+# It mounts FIRE's collector config, which adds one exporter to the tentacle's OTLP receiver.
+# Commands: dev/omg/README.md, section a.
+services:
+  otel-collector:
+    volumes:
+      # Replaces OMG's mount of ./docker/local/otel-collector-config.yml: compose merges
+      # volumes by container path. Relative paths would resolve against OMG's root.
+      - ${FIRE_REPO:?set FIRE_REPO}/dev/omg/otel-collector-config.yml:/otel-collector-config.yaml:ro
+    extra_hosts:
+      # Docker Desktop provides host.docker.internal; this makes it resolve on Linux too.
+      - host.docker.internal:host-gateway

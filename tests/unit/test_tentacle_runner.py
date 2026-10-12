@@ -9,6 +9,7 @@ import os
 import signal
 import socket
 from collections.abc import AsyncIterator, Callable, Mapping
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -27,6 +28,7 @@ from fire.apps.tentacle.runner import (
     EXIT_UNSENT,
     Plan,
     PlannedProxy,
+    PlannedReceiver,
     PlannedSource,
     _serve,
     prepare,
@@ -34,7 +36,8 @@ from fire.apps.tentacle.runner import (
     run_tentacle,
 )
 from fire.core.domain.envelope import Envelope
-from fire.core.domain.observation import ChannelDirection
+from fire.core.domain.observation import ChannelDirection, SpanKind
+from fire.core.domain.operation import OperationInputs, OperationNamer
 from fire.core.ports.exchange_source import (
     ExchangeNote,
     ExchangeSink,
@@ -43,8 +46,16 @@ from fire.core.ports.exchange_source import (
     HttpMessage,
 )
 from fire.core.ports.record_source import RawRecord
+from fire.core.ports.span_source import (
+    RawLink,
+    RawSpan,
+    SpanBatchResult,
+    SpanRequestNote,
+    SpanSink,
+)
 from fire.core.services.exchange_pipeline import ExchangePipeline
 from fire.core.services.record_pipeline import RecordPipeline
+from fire.core.services.span_pipeline import SpanPipeline
 
 TOKEN = "runner-test-token"
 ENVELOPE = {"event_id": "id", "event_type": "type", "occurred_at": "at", "payload": "data"}
@@ -118,18 +129,22 @@ class Body:
     def __init__(self, status: int = 202) -> None:
         self.status = status
         self.shapes: list[dict[str, Any]] = []
+        self.spans: list[dict[str, Any]] = []
         self.release = asyncio.Event()
         self.release.set()
 
     async def __call__(self, request: httpx.Request) -> httpx.Response:
         await self.release.wait()
-        shapes = json.loads(request.content)["shapes"]
+        posted = json.loads(request.content)
         if self.status != 202:
             return httpx.Response(self.status, json={"detail": "x"})
-        self.shapes.extend(shapes)
-        report = {"accepted": len(shapes), "duplicate": 0, "rejected": []}
-        empty = {"accepted": 0, "duplicate": 0, "rejected": []}
-        return httpx.Response(202, json={"shapes": report, "spans": empty})
+        self.shapes.extend(posted["shapes"])
+        self.spans.extend(posted["spans"])
+        report = {
+            kind: {"accepted": len(posted[kind]), "duplicate": 0, "rejected": []}
+            for kind in ("shapes", "spans")
+        }
+        return httpx.Response(202, json=report)
 
     def transport(self) -> httpx.MockTransport:
         return httpx.MockTransport(self)
@@ -652,6 +667,197 @@ def test_prepare_opens_a_proxy_with_its_pipeline(tmp_path: Path) -> None:
         for planned in plan.sources:
             if isinstance(planned, PlannedProxy):
                 planned.proxy.close()
+
+
+TRACE = "4bf92f3577b34da6a3ce929d0e0e4736"
+START_NS = 1_791_768_368_257_502_981
+
+
+def _raw_span(span_id: str, **overrides: Any) -> RawSpan:
+    span = RawSpan(
+        trace_id=TRACE,
+        span_id=span_id,
+        parent_span_id=None,
+        service="orders-api",
+        kind=SpanKind.CLIENT,
+        start_ns=START_NS,
+        end_ns=START_NS + 1_000_000,
+        error=False,
+        naming=OperationInputs(SpanKind.CLIENT, "POST", method="POST", url="https://x.net/v1"),
+        status_code=200,
+    )
+    return replace(span, **overrides)
+
+
+class ScriptedReceiver:
+    """Reports scripted batches and notes to its sink, then serves until cancelled or fails."""
+
+    def __init__(
+        self,
+        batches: list[list[RawSpan]],
+        notes: tuple[SpanRequestNote, ...] = (),
+        *,
+        fail: bool = False,
+    ) -> None:
+        self.batches = batches
+        self.notes = notes
+        self.fail = fail
+        self.results: list[SpanBatchResult] = []
+        self.closed = False
+
+    async def serve(self, sink: SpanSink) -> None:
+        self.results = [sink.spans(batch) for batch in self.batches]
+        for note in self.notes:
+            sink.note(note)
+        if self.fail:
+            raise RuntimeError("planted-receiver-detail")
+        await asyncio.Event().wait()
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def _receiver_plan(receiver: ScriptedReceiver, **tentacle: Any) -> Plan:
+    pipeline = SpanPipeline(
+        system="shop",
+        source="traces",
+        sample_rate=1.0,
+        namer=OperationNamer(),
+        generalizer=FlatStarShapeGeneralizer(),
+        fingerprinter=Sha256ShapeFingerprinter(),
+    )
+    return Plan(
+        system="shop",
+        sources=[PlannedReceiver(id="traces", receiver=receiver, pipeline=pipeline)],
+        tentacle=TentacleConfig.model_validate(tentacle),
+        url="http://body/v0/observations",
+        token=TOKEN,
+    )
+
+
+@pytest.mark.unit
+async def test_received_spans_are_mapped_sent_and_counted(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.INFO)
+    batches = [
+        [_raw_span("a" * 16, request_body='{"qty": 1}'), _raw_span("b" * 16, trace_id=None)],
+        [_raw_span("c" * 16, request_body="", links=(RawLink(TRACE, "x"),))],
+    ]
+    receiver = ScriptedReceiver(batches, (SpanRequestNote.MALFORMED_REQUEST,))
+    body = Body()
+
+    assert await _serve_briefly(_receiver_plan(receiver, flush_ms=1), body) == EXIT_OK
+
+    assert receiver.results == [SpanBatchResult(True, 1), SpanBatchResult(True, 0)]
+    assert sorted(span["span_id"] for span in body.spans) == ["a" * 16, "c" * 16]
+    assert [span["operation"] for span in body.spans] == ["POST x.net/v1"] * 2
+    assert [shape["observation_id"] for shape in body.shapes] == [f"{TRACE}:{'a' * 16}:request"]
+    assert (
+        "source=traces read=3 built=3 sent=3 unsent=0 pending=0 rejected=invalid_ids:1 "
+        "skipped=body_empty:1 noted=invalid_link:1,malformed_request:1 "
+        "body_duplicate=0 body_rejected=-"
+    ) in caplog.text
+
+
+@pytest.mark.unit
+async def test_a_batch_that_does_not_fit_the_buffer_is_not_taken(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.INFO)
+    too_many = [_raw_span(f"{index + 1:016x}") for index in range(3)]
+    receiver = ScriptedReceiver([too_many, too_many[:2]])
+    body = Body()
+
+    assert await _serve_briefly(_receiver_plan(receiver, buffer_size=2, flush_ms=1), body) == (
+        EXIT_OK
+    )
+    assert receiver.results == [SpanBatchResult(False), SpanBatchResult(True)]
+    assert len(body.spans) == 2
+    assert "source=traces read=2 built=2 sent=2 unsent=0 pending=0 rejected=- skipped=- " in (
+        caplog.text
+    )
+    assert "noted=buffer_full:1" in caplog.text
+
+
+@pytest.mark.unit
+async def test_failing_receiver_exits_1_by_exception_type_only(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.DEBUG)
+    receiver = ScriptedReceiver([], fail=True)
+    plan = _receiver_plan(receiver)
+
+    assert await run(plan, asyncio.Event(), transport=Body().transport()) == EXIT_UNSENT
+    assert "source failed: source=traces error=RuntimeError" in caplog.text
+    assert "planted-receiver-detail" not in caplog.text
+
+
+def _otlp_source(listen_env: str = "LISTEN") -> dict[str, Any]:
+    return {"id": "traces", "kind": "otlp", "listen_env": listen_env}
+
+
+@pytest.mark.unit
+def test_an_otlp_source_without_its_address_is_skipped(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    fire_yml = _configure(tmp_path, [_replay_source(), _otlp_source()])
+    environ = _environ(_replay_file(tmp_path, [_record("1")]))
+
+    assert _run(fire_yml, environ) == EXIT_OK
+    assert "source skipped: source=traces reason=LISTEN is not set" in caplog.text
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "address",
+    ["4318", "127.0.0.1", "127.0.0.1:", ":4318", "127.0.0.1:0", "127.0.0.1:70000", "h:43a"],
+)
+def test_an_otlp_listen_address_must_be_host_and_port(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, address: str
+) -> None:
+    fire_yml = _configure(tmp_path, [_otlp_source()])
+
+    assert _run(fire_yml, _environ(LISTEN=address)) == EXIT_STARTUP_ERROR
+    assert "source traces: LISTEN is not a host:port address" in caplog.text
+
+
+@pytest.mark.unit
+def test_an_otlp_receiver_on_a_busy_port_is_a_startup_error(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    with socket.socket() as busy:
+        busy.bind(("127.0.0.1", 0))
+        busy.listen()
+        port = busy.getsockname()[1]
+        fire_yml = _configure(tmp_path, [_otlp_source()])
+
+        assert _run(fire_yml, _environ(LISTEN=f"127.0.0.1:{port}")) == EXIT_STARTUP_ERROR
+    assert f"source traces: cannot listen on 127.0.0.1:{port}" in caplog.text
+
+
+@pytest.mark.unit
+def test_prepare_opens_a_receiver_and_releases_it_on_a_later_startup_error(
+    tmp_path: Path,
+) -> None:
+    port = _free_port()
+    fire_yml = _configure(tmp_path, [_otlp_source(), _replay_source()])
+    environ = _environ(_replay_file(tmp_path, []), LISTEN=f"127.0.0.1:{port}")
+    plan = prepare("shop", config_path=fire_yml, environ=environ)
+    try:
+        assert [type(planned).__name__ for planned in plan.sources] == [
+            "PlannedReceiver",
+            "PlannedSource",
+        ]
+    finally:
+        for planned in plan.sources:
+            if isinstance(planned, PlannedReceiver):
+                planned.receiver.close()
+
+    environ["REPLAY"] = "/nonexistent/records.json"
+    assert _run(fire_yml, environ) == EXIT_STARTUP_ERROR
+    with socket.socket() as again:
+        again.bind(("127.0.0.1", port))
 
 
 @pytest.mark.unit

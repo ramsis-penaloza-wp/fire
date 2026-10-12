@@ -18,7 +18,7 @@ from fire.apps.config import TentacleConfig
 from fire.apps.tentacle.counters import SourceCounters
 from fire.apps.tentacle.sender import Outgoing, Sender
 from fire.core.domain.dossier import Shape, ShapeField
-from fire.core.domain.observation import Channel, ShapeObservation
+from fire.core.domain.observation import Channel, ShapeObservation, SpanKind, SpanObservation
 
 URL = "http://body/v0/observations"
 TOKEN = "sender-test-token"
@@ -219,6 +219,59 @@ async def test_body_counts_are_kept_per_source() -> None:
     assert counters.sent == 6
     assert counters.body_duplicate == 2
     assert counters.body_rejected == {"fingerprint_mismatch": 1, "invalid": 2}
+
+
+SPAN = SpanObservation(
+    system="shop",
+    source="a",
+    trace_id="4bf92f3577b34da6a3ce929d0e0e4736",
+    span_id="00f067aa0ba902b7",
+    service="orders-api",
+    kind=SpanKind.SERVER,
+    operation="POST /v1/orders",
+    status_code=None,
+    error=False,
+    start=T0,
+    duration_ms=1.5,
+)
+
+
+@pytest.mark.unit
+async def test_spans_and_shapes_of_a_batch_are_posted_apart() -> None:
+    harness = Harness(Body())
+    harness.counters["a"].built += 1
+    span = Outgoing(SPAN, harness.outgoing().ack)
+    await harness.sender.send([harness.outgoing(observation_id="o1"), span])
+
+    [request] = harness.body.requests
+    posted = json.loads(request.content)
+    assert [shape["observation_id"] for shape in posted["shapes"]] == ["o1"]
+    assert [SpanObservation.model_validate(item) for item in posted["spans"]] == [SPAN]
+    assert posted["spans"][0]["parent_span_id"] is None
+    assert harness.counters["a"].sent == 2
+
+
+@pytest.mark.unit
+async def test_body_counts_include_spans() -> None:
+    shapes = {"accepted": 1, "duplicate": 0, "rejected": []}
+    spans = {
+        "accepted": 0,
+        "duplicate": 1,
+        "rejected": [{"index": 1, "reason": "unknown_source"}],
+    }
+    answer = httpx.Response(202, json={"shapes": shapes, "spans": spans})
+    harness = Harness(Body(answer))
+    harness.counters["a"].built += 2
+    await harness.sender.send(
+        [
+            harness.outgoing(),
+            Outgoing(SPAN, harness.outgoing().ack),
+            Outgoing(SPAN, harness.outgoing().ack),
+        ]
+    )
+
+    counters = harness.counters["a"]
+    assert (counters.body_duplicate, counters.body_rejected) == (1, {"unknown_source": 1})
 
 
 @pytest.mark.unit

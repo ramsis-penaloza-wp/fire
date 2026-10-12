@@ -18,8 +18,11 @@ discovery:
     path_env: OMG_MANIFEST_PATH
 
 # Where the tentacle reads. Contract: docs/specs/tentacle.md#sources-in-the-system-yaml.
-# `replay` and `http_proxy` run so far; the tentacle skips the others and says so.
+# `replay`, `http_proxy`, and `otlp` run so far; the tentacle skips the others and says so.
 sources:
+  # Spans from OMG's OpenTelemetry collector, which dev/omg/ gives one more exporter, to
+  # host.docker.internal:4318. Contract: docs/specs/http-and-span-capture.md#otlp-receiver.
+  - {id: omg-traces, kind: otlp, listen_env: OMG_OTLP_LISTEN}
   # Inbound HTTP: post to the proxy port instead of the service's. Route templates come from
   # each upstream's /openapi.json. Contract: docs/specs/http-and-span-capture.md#inbound-proxy.
   # Upstream port + 100. Not 8021: macOS's launchd can hold localhost:8021 for its ftp-proxy.

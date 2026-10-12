@@ -16,9 +16,12 @@ discovery:
     kind: event_chains_graph         # parser for the manifest format
     path_env: EXAMPLE_MANIFEST_PATH  # env var holding the manifest file path
 
-# Where the tentacle reads. Kinds: replay, kinesis, dynamodb_stream, sns_fanout, s3_capture.
-# Contract: docs/specs/tentacle.md#sources-in-the-system-yaml
+# Where the tentacle reads. Kinds: replay, kinesis, dynamodb_stream, sns_fanout, s3_capture,
+# http_proxy, otlp. Contract: docs/specs/tentacle.md#sources-in-the-system-yaml
 sources:
+  - id: traces                       # spans from the system's OpenTelemetry collector
+    kind: otlp
+    listen_env: EXAMPLE_OTLP_LISTEN  # env var holding the listen address, such as 127.0.0.1:4318
   - id: domain-events                # the observations' `source`; unique within the system
     kind: kinesis
     direction: internal              # internal: the system's own events; inbound: external
@@ -30,6 +33,18 @@ sources:
       occurred_at: metadata.timestamp  # ISO 8601, or {path: ts, epoch: ms}
       work_id: work_unit_id          # optional; joins events, captures, and outcomes
       payload: payload               # the value generalized into a shape
+
+# How outbound HTTP calls are named. A host not listed keeps its name, and each path segment
+# that looks like an id becomes {id}. A listed host takes its alias, and a path matching none
+# of its templates becomes {alias}/{unlisted}. Contract:
+# docs/specs/http-and-span-capture.md#operation-names
+operations:
+  http:
+    - hosts: ["*.partner.example.com"]  # exact names, or "*." plus a suffix
+      alias: partner                    # replaces the host in operation names
+      paths:
+        - /api/{version}/orders
+        - /api/{version}/orders/{order_id}
 
 # Exceptions only. Each name must be declared or observed, or the coverage audit flags it.
 policy:
