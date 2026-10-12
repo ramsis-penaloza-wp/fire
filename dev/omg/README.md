@@ -7,8 +7,9 @@ tentacle run on the host. Nothing in the OMG repository changes: FIRE adds one c
 passed with an extra `-f`, and its own collector config.
 
 **Status: partly planned.** The body runs, and so does the tentacle with its `replay` source
-(step 1.3) and its inbound proxies (step 1.6), so the inbound part of the drift demo (section e)
-runs today. Roadmap steps 1.4, 1.7, 1.8, 1.10, and 2.6 add the other files and commands below.
+(step 1.3), its OTLP receiver (step 1.4), and its inbound proxies (step 1.6), so section a, the
+L2 tests of section c, and the inbound part of the drift demo (section e) run today. Roadmap
+steps 1.7, 1.8, 1.10, and 2.6 add the other files and commands below.
 
 Related: [ingest spec](../../docs/specs/ingest-drift-and-feedback.md),
 [tentacle](../../docs/specs/tentacle.md), [HTTP and span capture](../../docs/specs/http-and-span-capture.md),
@@ -35,70 +36,31 @@ OMG, per its `README.md`, `AGENTS.md`, and `.docs/runbooks/local-setup.md`:
 FIRE: Python 3.13+, uv, `jq`, `curl`, and `make install`. Copy `.env.example` to `.env` and set
 `FIRE_API_TOKEN`. The curl checks below read it from the shell: `set -a; . "$FIRE_REPO/.env"; set +a`.
 
-## Files in this directory (steps 1.4 and 2.6, none created yet; step 1.6 needs none)
+## Files in this directory (step 2.6 adds `corpora/`; step 1.6 needs none)
 
 | File | Step | Holds |
 |------|------|-------|
 | `compose.fire.yml` | 1.4 | Override that mounts FIRE's collector config into OMG's `otel-collector` |
 | `otel-collector-config.yml` | 1.4 | OMG's collector config plus one exporter to the tentacle |
+| `record_otlp.py` | 1.4 | Records what the collector exports to FIRE, scrubbed, as L1 fixtures (section c) |
 | `corpora/` | 2.6 | Drift corpora: `events/` (WorkUnits), `outbound/` (Oracle captures), `path/` (place-order OTLP traces) |
 
-`compose.fire.yml`:
-
-```yaml
-services:
-  otel-collector:
-    volumes:
-      - ${FIRE_REPO:?set FIRE_REPO}/dev/omg/otel-collector-config.yml:/otel-collector-config.yaml:ro
-    extra_hosts:
-      - host.docker.internal:host-gateway
-```
-
-- Compose merges `volumes` across files by container path, so this entry replaces OMG's
+- `compose.fire.yml` mounts FIRE's collector config and adds `extra_hosts`. Compose merges
+  `volumes` across files by container path, so its entry replaces OMG's
   `./docker/local/otel-collector-config.yml` mount; OMG's `--config=/otel-collector-config.yaml`
   command still applies. Relative paths in every `-f` file resolve against the first file's
-  directory (OMG's root), so the source goes through `${FIRE_REPO}`. Both were checked with
-  `docker compose config` (Compose v5.1.2).
-- `extra_hosts` makes `host.docker.internal` resolve on Linux; Docker Desktop provides it.
-
-`otel-collector-config.yml` is OMG's `docker/local/otel-collector-config.yml` plus
-`otlphttp/fire` in the traces pipeline, next to `otlp` (Jaeger) and `debug`. The exporter
-appends `/v1/traces` to `endpoint`.
-
-```yaml
-receivers:
-  otlp:
-    protocols:
-      grpc:
-        endpoint: "0.0.0.0:55680"
-      http:
-        endpoint: "0.0.0.0:55681"
-exporters:
-  otlp:
-    endpoint: warby-jaeger:4317
-    tls:
-      insecure: true
-  prometheus:
-    endpoint: "warby-otel-collector:8889"
-  debug:
-    verbosity: detailed
-    sampling_initial: 5
-    sampling_thereafter: 200
-  otlphttp/fire:
-    endpoint: http://host.docker.internal:4318
-    encoding: json
-    compression: none
-service:
-  pipelines:
-    traces:
-      receivers: [otlp]
-      exporters: [otlp, debug, otlphttp/fire]
-    metrics:
-      receivers: [otlp]
-      exporters: [prometheus, debug]
-```
-
-TODO(1.4): fix the tentacle's OTLP listen port; this README assumes `4318`.
+  directory (OMG's root), so the source goes through `${FIRE_REPO}`. `docker compose config`
+  shows the merge (Compose v5.1.2).
+- `extra_hosts` makes `host.docker.internal` resolve on Linux; Docker Desktop provides it, and
+  reaches a receiver listening on the host's `127.0.0.1` (checked on macOS).
+- `otel-collector-config.yml` is OMG's `docker/local/otel-collector-config.yml` plus
+  `otlp_http/fire` in the traces pipeline, next to `otlp` (Jaeger) and `debug`: JSON, no
+  compression, to `http://host.docker.internal:4318`, where the exporter appends `/v1/traces`.
+  Collector 0.157, which OMG's unpinned image runs, names the exporter `otlp_http` and warns on
+  the old `otlphttp`; an image from before the rename needs `otlphttp`. The warning about the
+  `otlp` exporter's name is OMG's own config, kept as is.
+- The tentacle's receiver listens where `OMG_OTLP_LISTEN` says: `127.0.0.1:4318` on macOS,
+  `0.0.0.0:4318` on Linux. The port is fixed by the collector config.
 
 ## a. Start OMG with FIRE's override (step 1.4)
 
@@ -131,6 +93,9 @@ docker logs warby-omg-otel-collector 2>&1 | grep 'Everything is ready'
 curl -s http://localhost:8020/healthcheck && curl -s http://localhost:8030/healthcheck
 ```
 
+Until the tentacle's receiver runs, the collector logs `otlp_http/fire` export errors and drops
+what it cannot send to FIRE; Jaeger keeps receiving every trace either way.
+
 ## b. Start the body and the tentacle
 
 Body (exists today), on `127.0.0.1:8000` unless `FIRE_HOST` or `FIRE_PORT` say otherwise:
@@ -154,10 +119,14 @@ fixed in `config/systems/omg.yml`.
 The inbound proxies (step 1.6) need OMG's API and validation engine up (section a without the
 collector is enough). `omg-api` listens on `:8120` in front of `:8020`, and `omg-validation`
 on `:8130` in front of `:8030`. Each fetches its upstream's `/openapi.json` and logs
-`templates loaded: source=omg-api templates=<n> dropped=0`; the other sources are skipped:
+`templates loaded: source=omg-api templates=<n> dropped=0`. The OTLP receiver (step 1.4),
+`omg-traces`, listens on `OMG_OTLP_LISTEN` for the collector of section a and logs
+`spans received: source=omg-traces` with its first batch; its counters line counts spans. The
+other sources are skipped:
 
 ```bash
 cd "$FIRE_REPO"
+OMG_OTLP_LISTEN=127.0.0.1:4318 \
 OMG_API_UPSTREAM=http://localhost:8020 OMG_VALIDATION_UPSTREAM=http://localhost:8030 \
   uv run python -m fire.apps.tentacle --system omg 2>&1 | tee /tmp/fire-tentacle.log
 ```
@@ -178,6 +147,7 @@ Every source at once, for the later steps:
 cd "$FIRE_REPO"
 export OMG_MANIFEST_PATH="$OMG_REPO/scripts/event_chains/event_chains_graph.json"
 export OMG_REPLAY_PATH="$OMG_REPO/scripts/test_payloads"   # 1.3; non-WorkUnit files count as rejected
+export OMG_OTLP_LISTEN=127.0.0.1:4318                       # 1.4; 0.0.0.0:4318 on Linux
 export OMG_API_UPSTREAM=http://localhost:8020               # 1.6; the proxy listens on :8120
 export OMG_VALIDATION_UPSTREAM=http://localhost:8030        # 1.6; the proxy listens on :8130
 export OMG_TRANSMISSION_BUCKET=order-management-gateway-transmission-data-dev   # 1.7
@@ -198,7 +168,24 @@ curl -s -o /dev/null -w '%{http_code}\n' http://localhost:8130/healthcheck   # 2
 
 OMG's targets run in its `python-builder` container and call `warby-omg-order-management-api:8000`
 or LocalStack directly. They bypass the proxy: they give spans and captures, never inbound
-request or response shapes. Run them from `$OMG_REPO`.
+request or response shapes. Run them from `$OMG_REPO`. `make test-order` always posts the same
+order, so after its first run OMG answers `201` from its idempotency record: a short trace,
+with no order written and no listener. For the whole flow, post the same payload with fresh ids,
+as the L2 tests do:
+
+```bash
+cd "$OMG_REPO"
+jq --arg id "fire$(date +%s)" '.referenceOrderId = $id | .checkoutId = $id' \
+  scripts/test_payloads/test_order_payload.json \
+  | curl -sS -o /dev/null -w '%{http_code}\n' http://localhost:8020/v1/orders/place_order \
+      -H 'Content-Type: application/json' --data-binary @-
+```
+
+The receiver then gets the API's trace (the `SERVER` span of `POST /v1/orders/place_order`, its
+DynamoDB, Okta, payments, and tax calls) within seconds, and within a minute the listener's
+trace, whose root span links to that `SERVER` span: the SNS `Publish` and the processors it
+feeds. Staging refuses sf-publisher's Helios call locally, so SQS redelivers that work unit a
+few times, and its retries arrive with later traffic.
 
 | Target | Exercises |
 |--------|-----------|
@@ -228,15 +215,35 @@ curl -s -H "$H" http://127.0.0.1:8000/v0/systems/omg/streams | jq '.streams[].ke
 ```
 
 `/streams` lists `http:inbound:POST /v1/orders/place_order:request` and one `:response:`
-stream per status class OMG answered. The proxy adds a `traceparent` to each request, so OMG's
-`SERVER` span in Jaeger (<http://localhost:16686>) is a child of the span id the shapes carry.
-The L2 test checks both, with the four payloads above, by querying Jaeger's API; it runs its
-own proxy on a free port, so it needs no tentacle or body running:
+stream per status class OMG answered. The proxy adds a `traceparent` to each request, so the
+`SERVER` span the receiver gets is a child of the span id the shapes carry.
+
+The L2 tests need section a with the collector override, and nothing else on `4318`: stop the
+tentacle first. They run their own proxy on a free port and their own receiver on
+`OMG_OTLP_LISTEN` (default `127.0.0.1:4318`), so no body or tentacle needs to run.
+`test_tentacle_proxy_omg.py` posts the four payloads above through the proxy and finds each
+request's `SERVER` span among the spans the receiver sent; `test_tentacle_otlp_omg.py` places
+a fresh order with canaries in its customer fields, checks the flow above arrives joined and
+without a canary, that Jaeger (<http://localhost:16686>) holds every trace the receiver got,
+and that Jaeger still gets a new order's trace with nothing on the receiver's port:
 
 ```bash
 cd "$FIRE_REPO"
-OMG_REPO="$OMG_REPO" uv run pytest tests/integration/test_tentacle_proxy_omg.py \
-  tests/unit/test_openapi_routes.py -m omg_local
+OMG_REPO="$OMG_REPO" uv run pytest tests/integration/test_tentacle_otlp_omg.py \
+  tests/integration/test_tentacle_proxy_omg.py tests/unit/test_openapi_routes.py -m omg_local
+```
+
+The L1 recordings in `tests/fixtures/omg/otlp/` come from `record_otlp.py`, which listens where
+the receiver would and writes each export the collector sends, scrubbed: allowlisted attributes
+keep their values, every other value becomes a placeholder of its type, and URLs lose their
+query values. To record again, stop the tentacle, start the recorder, place one fresh order as
+above, wait a minute for the listener's trace, then stop it with Ctrl-C. Review every file
+before committing: only names, hosts, paths, AWS resource names, ports, and status codes may
+keep a value.
+
+```bash
+cd "$FIRE_REPO"
+uv run python dev/omg/record_otlp.py tests/fixtures/omg/otlp/place_order_1
 ```
 
 ## d. Phase 1 exit run (step 1.10)
@@ -262,6 +269,8 @@ curl -s -H "$H" http://127.0.0.1:8000/v0/systems/omg/paths | jq .
 - `/paths` has `POST /v1/orders/place_order` reaching the DynamoDB write, the listener, SNS,
   the processors, and their partner calls.
 - TODO(1.10): say how `audit_coverage` runs on observed event types before `/coverage` (2.5).
+- TODO(1.10): `make test-order` repeats one order, so only its first run gives the listener's
+  flow (section c); post the order with fresh ids, or add a target that does.
 
 Canary order, with unique strings in every customer field and in the order ids:
 
@@ -358,16 +367,22 @@ rm -f /tmp/fire-body.log /tmp/fire-tentacle.log /tmp/fire-canary-order.json
 - OMG's clients call partner staging services locally (`config/dev.yml`), and product reads hit
   the stage catalog table. Every target above reaches staging; outbound drift is tested at L1.
 - Local Kinesis is off unless `KINESIS_ENABLED=true` at `tf/local/apply`.
-- FIRE's exporter is added, never substituted: Jaeger keeps every trace, and step 1.4 checks it.
+- FIRE's exporter is added, never substituted: Jaeger keeps every trace, also with the tentacle
+  stopped, and `test_tentacle_otlp_omg.py` checks both.
 - OMG's `make docker/up/otel`, `docker/up/infrastructure`, and `docker/up` recreate the
   collector without the override; rerun the command in a.
 - What differs on AWS (L3: inbound bodies, span delivery, stream readers) is out of scope.
 
 ## Troubleshooting
 
-- **The collector cannot reach the tentacle.** Its logs show `otlphttp/fire` export errors. Test
-  from OMG's network with `docker run --rm --network warbyparker --add-host host.docker.internal:host-gateway curlimages/curl -s -o /dev/null -w '%{http_code}\n' -X POST -H 'Content-Type: application/json' -d '{}' http://host.docker.internal:4318/v1/traces`.
-  On Linux the tentacle must listen on `0.0.0.0`, not `127.0.0.1`.
+- **The collector cannot reach the tentacle.** Its logs show `otlp_http/fire` export errors, and
+  the tentacle never logs `spans received`. Test from OMG's network with
+  `docker run --rm --network warbyparker --add-host host.docker.internal:host-gateway curlimages/curl -s -o /dev/null -w '%{http_code}\n' -X POST -H 'Content-Type: application/json' -d '{}' http://host.docker.internal:4318/v1/traces`,
+  which gives `200` from a running receiver. On Linux set `OMG_OTLP_LISTEN=0.0.0.0:4318`, not
+  `127.0.0.1:4318`. A tentacle without `OMG_OTLP_LISTEN` skips `omg-traces` and says so.
+- **The receiver refuses requests.** `request refused: source=omg-traces status=415` means the
+  exporter sends protobuf: its `encoding: json` is missing. Each refusal reason is logged once
+  and counted under `noted`.
 - **A tentacle port is busy.** The tentacle exits `2` with `cannot listen on 127.0.0.1:8120`;
   `lsof -nP -iTCP:8120 -iTCP:8130 -iTCP:4318 -sTCP:LISTEN` names the process. Without `sudo`,
   `lsof` misses sockets held by `launchd`; `netstat -anv -p tcp | grep LISTEN` shows them. On

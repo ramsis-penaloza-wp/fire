@@ -117,8 +117,10 @@ manifest (`event_chains_graph` format) for the coverage audit. OMG is the first
 watched system (`config/systems/omg.yml`; set `OMG_MANIFEST_PATH` to its event graph).
 The **tentacle** (`fire.apps.tentacle`) reads a system's declared sources, turns each payload
 into a shape and a fingerprint, and sends only those to the body's `POST /v0/observations`;
-today it reads `replay` sources (`docs/specs/tentacle.md`) and runs `http_proxy` sources, a
-reverse proxy in front of an HTTP service that shapes each request and response it forwards
+today it reads `replay` sources (`docs/specs/tentacle.md`), runs `http_proxy` sources, a
+reverse proxy in front of an HTTP service that shapes each request and response it forwards,
+and runs `otlp` sources, an OTLP/HTTP JSON receiver that turns the system's spans into
+attribute-free span observations with operation names built from code
 (`docs/specs/http-and-span-capture.md`).
 Agent rules for this repo live in `.cursor/rules/`.
 

@@ -13,12 +13,13 @@ Model: `SystemConfig` in `fire/apps/config.py`. Contract:
   skipped by the loader; a test keeps `_template.yml` valid.
 - Unknown keys fail validation at every level. A new key needs a model field, a test, and a row
   in the spec.
-- Declare decisions only: Slack target, manifest location, sources, policy exceptions,
-  sampling, and drift thresholds. Never list events, processors, or services; discovery reads
-  them from the manifest.
+- Declare decisions only: Slack target, manifest location, sources, per-host operation names
+  (`operations.http`), policy exceptions, sampling, and drift thresholds. Never list events,
+  processors, or services; discovery reads them from the manifest.
 - `notify.slack.channel_id` is a channel id (`C…` or `G…`), never a `#name`.
-- Paths and resource names go through env vars (`path_env`, `stream_env`, `table_env`,
-  `topic_env`, `bucket_env`). Add each new env var to `.env.example`.
+- Paths, resource names, upstreams, and machine-specific listen addresses go through env vars
+  (`path_env`, `stream_env`, `table_env`, `topic_env`, `bucket_env`, `upstream_env`,
+  `listen_env`). Add each new env var to `.env.example`.
 - Each source declares its `kind`; event-carrying kinds also declare `direction` and an
   `envelope` of dotted paths (docs/specs/tentacle.md#envelope). `dedupe_key` is gone; use
   `envelope.event_id`.
