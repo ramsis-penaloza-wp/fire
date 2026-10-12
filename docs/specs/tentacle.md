@@ -380,8 +380,8 @@ fixtures in CI; L2 OMG's local stack, marker `omg_local`, skipped unless `OMG_RE
 OMG dev on AWS, read only, by hand. Each step runs the canary harness for its kinds.
 
 - **1.3.** L0: envelope paths and rejections, sampling, batching, retry (`503` then `202`; no
-  retry on `401`), unsent counts, backpressure, exit codes. L1: OMG's four `WorkUnit` samples,
-  as fixtures and from `OMG_REPO` when set, give four `event:internal:<event_type>:payload`
+  retry on `401`), unsent counts, backpressure, exit codes. L1: OMG's five `WorkUnit` samples,
+  as fixtures and from `OMG_REPO` when set, give five `event:internal:<event_type>:payload`
   channels of one sample each. Integration: a second replay into the body adds only duplicates.
   The tests: `tests/unit/test_envelope.py`, `test_record_pipeline.py`, `test_replay_source.py`,
   `test_tentacle_sender.py`, `test_tentacle_runner.py`, `test_fire_config.py`, and the source
@@ -389,7 +389,7 @@ OMG dev on AWS, read only, by hand. Each step runs the canary harness for its ki
   `omg_local` case that replays OMG's whole `scripts/test_payloads/` and checks the fixtures
   still give its fingerprints) and `test_tentacle_canary.py`. The fixtures in
   `tests/fixtures/omg/test_payloads/` are OMG's synthetic samples, copied unchanged at OMG
-  commit `d00569da3`.
+  commit `2303406c6`.
 - **1.6.** The proxy's tests are listed in
   [HTTP and span capture](http-and-span-capture.md#tests); the runner's are the proxy cases of
   `test_tentacle_runner.py` (exchanges counted and sent, `buffer_full`, a failing proxy, an

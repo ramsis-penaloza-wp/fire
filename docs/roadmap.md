@@ -169,12 +169,12 @@ Each source gets `kind`-specific keys and an `envelope`; `dedupe_key` goes away.
 
 **Done when:**
 
-- Replaying OMG's four `WorkUnit` samples (`scripts/test_payloads/*_work_unit.json`) creates
-  four event channels with one sample each.
+- Replaying OMG's five `WorkUnit` samples (`scripts/test_payloads/*_work_unit.json`) creates
+  five event channels with one sample each.
 - A record missing an envelope value is counted as rejected and not sent.
 - The canary test passes for the replay source.
 
-**Test.** L0 for envelope paths and batching. L1 against OMG's four samples, copied as
+**Test.** L0 for envelope paths and batching. L1 against OMG's five samples, copied as
 fixtures; with `OMG_REPO` set, the test also reads them from OMG. Canary.
 
 ### 1.4 OTLP receiver

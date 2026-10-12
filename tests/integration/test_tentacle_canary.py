@@ -123,7 +123,7 @@ def test_replay_canary(
     broken = [f'{{"work_unit_id": "{canary.token()}", "payload": {{"x": "{canary.token()}"']
 
     records = [valid[0], missing_id, valid[1], bad_name, valid[2], not_an_object]
-    records += [bad_timestamp, valid[3], too_long, copy.deepcopy(valid[0])]
+    records += [bad_timestamp, valid[3], too_long, valid[4], copy.deepcopy(valid[0])]
     location = WIRE_FORMS["replay"](tmp_path / "replay", records, broken)
     transport = RecordingTransport(httpx.ASGITransport(app=app))
     environ = {"FIRE_API_TOKEN": TOKEN, "FIRE_BODY_URL": "http://body", "CANARY_REPLAY": location}
@@ -132,7 +132,7 @@ def test_replay_canary(
 
     assert code == EXIT_OK
     assert (
-        "source=samples read=11 built=4 sent=4 unsent=0 pending=0 "
+        "source=samples read=12 built=5 sent=5 unsent=0 pending=0 "
         "rejected=bad_name:1,bad_timestamp:1,invalid:1,missing_event_id:1,undecodable:2 "
         "skipped=local_duplicate:1 noted=- body_duplicate=0 body_rejected=-"
     ) in caplog.text
@@ -150,7 +150,7 @@ def test_replay_canary(
     assert canary.leaks(catalog_state, envelope=False) == []
     streams = TestClient(app).get("/v0/systems/canary/streams", headers={"X-FIRE-Token": TOKEN})
     assert streams.status_code == 200
-    assert len(streams.json()["streams"]) == 4
+    assert len(streams.json()["streams"]) == 5
     assert [leak for leak in canary.leaks(streams.text) if leak not in canary.names] == []
 
     captured = capfd.readouterr()
